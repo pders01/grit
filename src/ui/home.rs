@@ -22,7 +22,9 @@ fn render_review_requests(frame: &mut Frame, app: &App, area: Rect) {
     let is_active = app.home_section == HomeSection::ReviewRequests;
 
     let title_style = if is_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Gray)
     };
@@ -77,9 +79,15 @@ fn render_review_requests(frame: &mut Frame, app: &App, area: Rect) {
             let age = format_age(req.updated_at);
 
             let line = Line::from(vec![
-                Span::styled(format!("{:<25}", repo_display), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{:<25}", repo_display),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::raw(" "),
-                Span::styled(format!("#{:<5}", req.pr_number), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("#{:<5}", req.pr_number),
+                    Style::default().fg(Color::Gray),
+                ),
                 Span::raw(" "),
                 Span::styled(title, style),
                 Span::raw("  "),
@@ -108,7 +116,9 @@ fn render_my_prs(frame: &mut Frame, app: &App, area: Rect) {
     let is_active = app.home_section == HomeSection::MyPrs;
 
     let title_style = if is_active {
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Gray)
     };
@@ -169,9 +179,15 @@ fn render_my_prs(frame: &mut Frame, app: &App, area: Rect) {
             };
 
             let line = Line::from(vec![
-                Span::styled(format!("{:<25}", repo_display), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("{:<25}", repo_display),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::raw(" "),
-                Span::styled(format!("#{:<5}", pr.number), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("#{:<5}", pr.number),
+                    Style::default().fg(Color::Gray),
+                ),
                 Span::raw(" "),
                 Span::styled(title, style),
                 Span::raw("  "),

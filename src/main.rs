@@ -36,9 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }));
 
     // Get GitHub token from environment
-    let token = std::env::var("GITHUB_TOKEN").map_err(|_| {
-        GritError::Auth("GITHUB_TOKEN environment variable not set".to_string())
-    })?;
+    let token = std::env::var("GITHUB_TOKEN")
+        .map_err(|_| GritError::Auth("GITHUB_TOKEN environment variable not set".to_string()))?;
 
     // Initialize GitHub client
     let github = GitHub::new(token)?;

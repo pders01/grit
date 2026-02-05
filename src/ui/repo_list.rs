@@ -8,9 +8,7 @@ use crate::app::App;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     if app.repos.is_empty() && !app.loading {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Repositories");
+        let block = Block::default().borders(Borders::ALL).title("Repositories");
         let empty = ratatui::widgets::Paragraph::new("No repositories found")
             .block(block)
             .style(Style::default().fg(Color::Gray));
@@ -53,7 +51,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             let line = Line::from(vec![
                 Span::styled(format!("{:<30}", repo_display), style),
                 Span::raw(" "),
-                Span::styled(format!("★ {:>5}", repo.stars), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("★ {:>5}", repo.stars),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::raw("  "),
                 Span::styled(description, Style::default().fg(Color::Gray)),
             ]);

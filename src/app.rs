@@ -6,7 +6,9 @@ use tokio::sync::mpsc;
 use crate::action::{Action, RepoTab};
 use crate::event::Event;
 use crate::github::GitHub;
-use crate::types::{ActionRun, Commit, CommitDetail, Issue, MyPr, PrSummary, PullRequest, Repository, ReviewRequest};
+use crate::types::{
+    ActionRun, Commit, CommitDetail, Issue, MyPr, PrSummary, PullRequest, Repository, ReviewRequest,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
@@ -199,36 +201,34 @@ impl App {
             Action::Quit => {
                 self.should_quit = true;
             }
-            Action::Back => {
-                match self.screen {
-                    Screen::Home => {
-                        self.should_quit = true;
-                    }
-                    Screen::RepoList => {
-                        self.screen = Screen::Home;
-                    }
-                    Screen::RepoView => {
-                        self.screen = Screen::RepoList;
-                        self.repo_tab = RepoTab::default();
-                        self.prs.clear();
-                        self.issues.clear();
-                        self.commits.clear();
-                        self.action_runs.clear();
-                    }
-                    Screen::PrDetail => {
-                        self.screen = self.prev_screen.unwrap_or(Screen::Home);
-                        self.current_pr = None;
-                        self.scroll_offset = 0;
-                        self.prev_screen = None;
-                    }
-                    Screen::CommitDetail => {
-                        self.screen = self.prev_screen.unwrap_or(Screen::RepoView);
-                        self.current_commit = None;
-                        self.scroll_offset = 0;
-                        self.prev_screen = None;
-                    }
+            Action::Back => match self.screen {
+                Screen::Home => {
+                    self.should_quit = true;
                 }
-            }
+                Screen::RepoList => {
+                    self.screen = Screen::Home;
+                }
+                Screen::RepoView => {
+                    self.screen = Screen::RepoList;
+                    self.repo_tab = RepoTab::default();
+                    self.prs.clear();
+                    self.issues.clear();
+                    self.commits.clear();
+                    self.action_runs.clear();
+                }
+                Screen::PrDetail => {
+                    self.screen = self.prev_screen.unwrap_or(Screen::Home);
+                    self.current_pr = None;
+                    self.scroll_offset = 0;
+                    self.prev_screen = None;
+                }
+                Screen::CommitDetail => {
+                    self.screen = self.prev_screen.unwrap_or(Screen::RepoView);
+                    self.current_commit = None;
+                    self.scroll_offset = 0;
+                    self.prev_screen = None;
+                }
+            },
             Action::ScrollUp => match self.screen {
                 Screen::Home => match self.home_section {
                     HomeSection::ReviewRequests => {
@@ -486,10 +486,16 @@ impl App {
                     if let Some((owner, repo)) = &self.current_repo {
                         self.loading = true;
                         match next {
-                            RepoTab::PullRequests => self.spawn_load_prs(owner.clone(), repo.clone()),
+                            RepoTab::PullRequests => {
+                                self.spawn_load_prs(owner.clone(), repo.clone())
+                            }
                             RepoTab::Issues => self.spawn_load_issues(owner.clone(), repo.clone()),
-                            RepoTab::Commits => self.spawn_load_commits(owner.clone(), repo.clone()),
-                            RepoTab::Actions => self.spawn_load_action_runs(owner.clone(), repo.clone()),
+                            RepoTab::Commits => {
+                                self.spawn_load_commits(owner.clone(), repo.clone())
+                            }
+                            RepoTab::Actions => {
+                                self.spawn_load_action_runs(owner.clone(), repo.clone())
+                            }
                         }
                     }
                 }
@@ -513,10 +519,16 @@ impl App {
                     if let Some((owner, repo)) = &self.current_repo {
                         self.loading = true;
                         match prev {
-                            RepoTab::PullRequests => self.spawn_load_prs(owner.clone(), repo.clone()),
+                            RepoTab::PullRequests => {
+                                self.spawn_load_prs(owner.clone(), repo.clone())
+                            }
                             RepoTab::Issues => self.spawn_load_issues(owner.clone(), repo.clone()),
-                            RepoTab::Commits => self.spawn_load_commits(owner.clone(), repo.clone()),
-                            RepoTab::Actions => self.spawn_load_action_runs(owner.clone(), repo.clone()),
+                            RepoTab::Commits => {
+                                self.spawn_load_commits(owner.clone(), repo.clone())
+                            }
+                            RepoTab::Actions => {
+                                self.spawn_load_action_runs(owner.clone(), repo.clone())
+                            }
                         }
                     }
                 }
@@ -564,7 +576,11 @@ impl App {
                         match self.repo_tab {
                             RepoTab::PullRequests => {
                                 if let Some(pr) = self.prs.get(self.pr_index) {
-                                    self.spawn_load_pr_detail(owner.clone(), repo.clone(), pr.number);
+                                    self.spawn_load_pr_detail(
+                                        owner.clone(),
+                                        repo.clone(),
+                                        pr.number,
+                                    );
                                 }
                             }
                             RepoTab::Issues => {
@@ -818,7 +834,12 @@ impl App {
         match self.screen {
             Screen::PrDetail => {
                 if let Some(pr) = &self.current_pr {
-                    pr.body.as_deref().unwrap_or("").lines().count().saturating_sub(1)
+                    pr.body
+                        .as_deref()
+                        .unwrap_or("")
+                        .lines()
+                        .count()
+                        .saturating_sub(1)
                 } else {
                     0
                 }

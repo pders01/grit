@@ -199,7 +199,14 @@ impl GitHub {
                     _ => PrState::Open,
                 };
 
-                Some((repo_owner, repo_name, issue.number, issue.title, state, issue.updated_at))
+                Some((
+                    repo_owner,
+                    repo_name,
+                    issue.number,
+                    issue.title,
+                    state,
+                    issue.updated_at,
+                ))
             })
             .collect();
 
@@ -274,13 +281,7 @@ impl GitHub {
             .items
             .into_iter()
             .map(|c| {
-                let message = c
-                    .commit
-                    .message
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .to_string();
+                let message = c.commit.message.lines().next().unwrap_or("").to_string();
                 let author = c
                     .author
                     .map(|a| a.login)
@@ -364,7 +365,10 @@ impl GitHub {
                             status: f.get("status")?.as_str()?.to_string(),
                             additions: f.get("additions").and_then(|a| a.as_u64()).unwrap_or(0),
                             deletions: f.get("deletions").and_then(|d| d.as_u64()).unwrap_or(0),
-                            patch: f.get("patch").and_then(|p| p.as_str()).map(|s| s.to_string()),
+                            patch: f
+                                .get("patch")
+                                .and_then(|p| p.as_str())
+                                .map(|s| s.to_string()),
                         })
                     })
                     .collect()
@@ -436,7 +440,12 @@ impl GitHub {
     }
 
     /// Get check status for a PR
-    pub async fn get_check_status(&self, owner: &str, repo: &str, pr_number: u64) -> Result<ChecksStatus> {
+    pub async fn get_check_status(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> Result<ChecksStatus> {
         // Get the PR to find the head SHA
         let pr = self.client.pulls(owner, repo).get(pr_number).await?;
         let sha = pr.head.sha;
@@ -445,9 +454,7 @@ impl GitHub {
         let url = format!("/repos/{}/{}/commits/{}/check-runs", owner, repo, sha);
         let response: serde_json::Value = self.client.get(&url, None::<&()>).await?;
 
-        let check_runs = response
-            .get("check_runs")
-            .and_then(|r| r.as_array());
+        let check_runs = response.get("check_runs").and_then(|r| r.as_array());
 
         let Some(runs) = check_runs else {
             return Ok(ChecksStatus::None);

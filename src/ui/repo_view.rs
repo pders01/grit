@@ -26,18 +26,21 @@ fn render_tabs(frame: &mut Frame, app: &App, area: Rect) {
         .map(|(owner, repo)| format!("{}/{}", owner, repo))
         .unwrap_or_else(|| "Repository".to_string());
 
-    let titles = vec!["[P] Pull Requests", "[I] Issues", "[C] Commits", "[A] Actions"];
+    let titles = vec![
+        "[P] Pull Requests",
+        "[I] Issues",
+        "[C] Commits",
+        "[A] Actions",
+    ];
 
     let tabs = Tabs::new(titles)
         .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(Span::styled(
-                    format!(" {} ", repo_name),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )),
+            Block::default().borders(Borders::ALL).title(Span::styled(
+                format!(" {} ", repo_name),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )),
         )
         .select(match app.repo_tab {
             RepoTab::PullRequests => 0,
@@ -110,7 +113,10 @@ fn render_pr_preview(frame: &mut Frame, app: &App, area: Rect) {
             };
 
             let line = Line::from(vec![
-                Span::styled(format!("#{:<5}", pr.number), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("#{:<5}", pr.number),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::raw(" "),
                 Span::styled(format!("{:6}", pr.state), Style::default().fg(state_color)),
                 Span::raw(" "),
@@ -191,13 +197,22 @@ fn render_issues(frame: &mut Frame, app: &App, area: Rect) {
             };
 
             let line = Line::from(vec![
-                Span::styled(format!("#{:<5}", issue.number), Style::default().fg(Color::Cyan)),
+                Span::styled(
+                    format!("#{:<5}", issue.number),
+                    Style::default().fg(Color::Cyan),
+                ),
                 Span::raw(" "),
-                Span::styled(format!("{:6}", issue.state), Style::default().fg(state_color)),
+                Span::styled(
+                    format!("{:6}", issue.state),
+                    Style::default().fg(state_color),
+                ),
                 Span::raw(" "),
                 Span::styled(format!("{:<40}", title), style),
                 Span::raw(" "),
-                Span::styled(format!("{:<18}", labels), Style::default().fg(Color::Magenta)),
+                Span::styled(
+                    format!("{:<18}", labels),
+                    Style::default().fg(Color::Magenta),
+                ),
                 Span::raw(" "),
                 Span::styled(format!("@{:<15}", author), Style::default().fg(Color::Gray)),
             ]);
@@ -317,11 +332,14 @@ fn render_actions(frame: &mut Frame, app: &App, area: Rect) {
             let (status_icon, status_color) = match run.status {
                 ActionStatus::Completed => {
                     if let Some(conclusion) = &run.conclusion {
-                        (conclusion.to_string(), match conclusion {
-                            crate::types::ActionConclusion::Success => Color::Green,
-                            crate::types::ActionConclusion::Failure => Color::Red,
-                            _ => Color::Yellow,
-                        })
+                        (
+                            conclusion.to_string(),
+                            match conclusion {
+                                crate::types::ActionConclusion::Success => Color::Green,
+                                crate::types::ActionConclusion::Failure => Color::Red,
+                                _ => Color::Yellow,
+                            },
+                        )
                     } else {
                         ("?".to_string(), Color::Gray)
                     }
@@ -345,13 +363,19 @@ fn render_actions(frame: &mut Frame, app: &App, area: Rect) {
             let age = format_age(run.created_at);
 
             let line = Line::from(vec![
-                Span::styled(format!("{:<2}", status_icon), Style::default().fg(status_color)),
+                Span::styled(
+                    format!("{:<2}", status_icon),
+                    Style::default().fg(status_color),
+                ),
                 Span::raw(" "),
                 Span::styled(format!("{:<30}", name), style),
                 Span::raw(" "),
                 Span::styled(format!("{:<12}", branch), Style::default().fg(Color::Cyan)),
                 Span::raw(" "),
-                Span::styled(format!("{:<10}", run.event), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("{:<10}", run.event),
+                    Style::default().fg(Color::Gray),
+                ),
                 Span::raw(" "),
                 Span::styled(format!("{:>3}", age), Style::default().fg(Color::DarkGray)),
             ]);

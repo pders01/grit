@@ -9,9 +9,7 @@ use crate::types::PrState;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let Some(pr) = &app.current_pr else {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title("Pull Request");
+        let block = Block::default().borders(Borders::ALL).title("Pull Request");
         let empty = Paragraph::new("No pull request selected")
             .block(block)
             .style(Style::default().fg(Color::Gray));
@@ -21,10 +19,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(6),
-            Constraint::Min(0),
-        ])
+        .constraints([Constraint::Length(6), Constraint::Min(0)])
         .split(area);
 
     // Header section with PR metadata
@@ -45,20 +40,24 @@ fn render_header(frame: &mut Frame, pr: &crate::types::PullRequest, area: Rect) 
         Line::from(vec![
             Span::styled(
                 format!("#{} ", pr.number),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                &pr.title,
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(&pr.title, Style::default().add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
             Span::styled(
                 format!("{}", pr.state),
-                Style::default().fg(state_color).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(state_color)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" | "),
-            Span::styled(format!("@{}", pr.author), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("@{}", pr.author),
+                Style::default().fg(Color::Yellow),
+            ),
             Span::raw(" wants to merge "),
             Span::styled(&pr.head_branch, Style::default().fg(Color::Cyan)),
             Span::raw(" into "),
@@ -90,8 +89,8 @@ fn render_header(frame: &mut Frame, pr: &crate::types::PullRequest, area: Rect) 
         ]),
     ];
 
-    let header = Paragraph::new(lines)
-        .block(Block::default().borders(Borders::ALL).title("Details"));
+    let header =
+        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title("Details"));
 
     frame.render_widget(header, area);
 }

@@ -9,9 +9,7 @@ use crate::app::App;
 
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let Some(commit) = &app.current_commit else {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(" Commit ");
+        let block = Block::default().borders(Borders::ALL).title(" Commit ");
         let empty = Paragraph::new("No commit loaded")
             .block(block)
             .style(Style::default().fg(Color::Gray));
@@ -32,7 +30,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
-            Span::styled(format!("@{}", commit.author), Style::default().fg(Color::Cyan)),
+            Span::styled(
+                format!("@{}", commit.author),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::raw("  "),
             Span::styled(age, Style::default().fg(Color::DarkGray)),
         ]),
@@ -103,9 +104,15 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
-            Span::styled(format!("+{}", file.additions), Style::default().fg(Color::Green)),
+            Span::styled(
+                format!("+{}", file.additions),
+                Style::default().fg(Color::Green),
+            ),
             Span::raw(" "),
-            Span::styled(format!("-{}", file.deletions), Style::default().fg(Color::Red)),
+            Span::styled(
+                format!("-{}", file.deletions),
+                Style::default().fg(Color::Red),
+            ),
             Span::styled(" ───", Style::default().fg(Color::DarkGray)),
         ]));
 

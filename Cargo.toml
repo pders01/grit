@@ -2,7 +2,11 @@
 name = "grit"
 version = "0.1.0"
 edition = "2021"
-description = "A TUI for browsing GitHub pull requests"
+description = "A TUI for browsing GitHub repositories, pull requests, issues, commits, and actions"
+license = "MIT"
+readme = "README.md"
+keywords = ["github", "tui", "cli", "terminal"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 ratatui = "0.28"

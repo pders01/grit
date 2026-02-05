@@ -1,7 +1,7 @@
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -99,15 +99,31 @@ fn render_header(frame: &mut Frame, pr: &crate::types::PullRequest, area: Rect) 
 fn render_body(frame: &mut Frame, app: &App, pr: &crate::types::PullRequest, area: Rect) {
     let body_text = pr.body.as_deref().unwrap_or("No description provided.");
 
+    // Replace tabs with spaces to avoid rendering issues
     let lines: Vec<Line> = body_text
         .lines()
-        .skip(app.scroll_offset)
-        .map(Line::from)
+        .map(|l| Line::from(l.replace('\t', "    ")))
         .collect();
 
-    let body = Paragraph::new(Text::from(lines))
-        .block(Block::default().borders(Borders::ALL).title("Description"))
-        .wrap(Wrap { trim: false });
+    // Calculate visible area (account for borders)
+    let inner_height = area.height.saturating_sub(2) as usize;
+
+    // Clamp scroll offset to content bounds
+    let max_scroll = lines.len().saturating_sub(inner_height);
+    let scroll_offset = app.scroll_offset.min(max_scroll);
+
+    // Slice lines to visible range
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll_offset)
+        .take(inner_height)
+        .collect();
+
+    // Clear the area first to prevent artifacts
+    frame.render_widget(Clear, area);
+
+    let body = Paragraph::new(Text::from(visible_lines))
+        .block(Block::default().borders(Borders::ALL).title("Description"));
 
     frame.render_widget(body, area);
 }

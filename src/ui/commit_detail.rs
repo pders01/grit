@@ -2,7 +2,7 @@ use chrono::Utc;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 use crate::app::App;
@@ -112,18 +112,21 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         // Show diff if available
         if let Some(patch) = &file.patch {
             for diff_line in patch.lines() {
-                let (color, prefix) = if diff_line.starts_with('+') && !diff_line.starts_with("+++") {
-                    (Color::Green, "")
-                } else if diff_line.starts_with('-') && !diff_line.starts_with("---") {
-                    (Color::Red, "")
-                } else if diff_line.starts_with("@@") {
-                    (Color::Cyan, "")
+                // Replace tabs with spaces to avoid rendering issues
+                let sanitized = diff_line.replace('\t', "    ");
+
+                let color = if sanitized.starts_with('+') && !sanitized.starts_with("+++") {
+                    Color::Green
+                } else if sanitized.starts_with('-') && !sanitized.starts_with("---") {
+                    Color::Red
+                } else if sanitized.starts_with("@@") {
+                    Color::Cyan
                 } else {
-                    (Color::Gray, "")
+                    Color::Gray
                 };
 
                 lines.push(Line::from(Span::styled(
-                    format!("{}{}", prefix, diff_line),
+                    sanitized,
                     Style::default().fg(color),
                 )));
             }
@@ -132,20 +135,28 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(""));
     }
 
-    // Apply scroll offset
-    let visible_lines: Vec<Line> = lines
-        .into_iter()
-        .skip(app.scroll_offset)
-        .collect();
-
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" Commit {} ", short_sha));
 
-    let paragraph = Paragraph::new(visible_lines)
-        .block(block)
-        .wrap(Wrap { trim: false });
+    // Calculate visible area (account for borders)
+    let inner_height = area.height.saturating_sub(2) as usize;
 
+    // Clamp scroll offset to content bounds
+    let max_scroll = lines.len().saturating_sub(inner_height);
+    let scroll_offset = app.scroll_offset.min(max_scroll);
+
+    // Slice lines to visible range
+    let visible_lines: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll_offset)
+        .take(inner_height)
+        .collect();
+
+    // Clear the area first to prevent artifacts
+    frame.render_widget(Clear, area);
+
+    let paragraph = Paragraph::new(visible_lines).block(block);
     frame.render_widget(paragraph, area);
 }
 

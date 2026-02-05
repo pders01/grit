@@ -320,7 +320,10 @@ impl App {
                     }
                 },
                 Screen::PrDetail | Screen::CommitDetail => {
-                    self.scroll_offset += 1;
+                    let max = self.max_scroll_offset();
+                    if self.scroll_offset < max {
+                        self.scroll_offset += 1;
+                    }
                 }
             },
 
@@ -382,8 +385,7 @@ impl App {
                     }
                 },
                 Screen::PrDetail | Screen::CommitDetail => {
-                    // Scroll to a large offset (will be clamped by rendering)
-                    self.scroll_offset = 1000;
+                    self.scroll_offset = self.max_scroll_offset();
                 }
             },
 
@@ -459,7 +461,8 @@ impl App {
                         }
                     },
                     Screen::PrDetail | Screen::CommitDetail => {
-                        self.scroll_offset += page_size;
+                        let max = self.max_scroll_offset();
+                        self.scroll_offset = (self.scroll_offset + page_size).min(max);
                     }
                 }
             }
@@ -808,6 +811,38 @@ impl App {
                 }
             }
         });
+    }
+
+    /// Calculate max scroll offset for current detail view
+    fn max_scroll_offset(&self) -> usize {
+        match self.screen {
+            Screen::PrDetail => {
+                if let Some(pr) = &self.current_pr {
+                    pr.body.as_deref().unwrap_or("").lines().count().saturating_sub(1)
+                } else {
+                    0
+                }
+            }
+            Screen::CommitDetail => {
+                if let Some(commit) = &self.current_commit {
+                    // Header lines (4) + message lines + blank + file entries
+                    let mut lines = 5; // header, blank, stats, blank, "Message:"
+                    lines += commit.message.lines().count();
+                    lines += 1; // blank after message
+                    for file in &commit.files {
+                        lines += 1; // file header
+                        if let Some(patch) = &file.patch {
+                            lines += patch.lines().count();
+                        }
+                        lines += 1; // blank after file
+                    }
+                    lines.saturating_sub(1)
+                } else {
+                    0
+                }
+            }
+            _ => 0,
+        }
     }
 
     fn spawn_load_commit_detail(&self, owner: String, repo: String, sha: String) {

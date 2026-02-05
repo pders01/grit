@@ -1,5 +1,5 @@
 use crate::error::GritError;
-use crate::types::{ActionRun, Commit, Issue, MyPr, PrSummary, PullRequest, Repository, ReviewRequest};
+use crate::types::{ActionRun, Commit, CommitDetail, Issue, MyPr, PrSummary, PullRequest, Repository, ReviewRequest};
 
 /// Tab selection for repo view
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -43,6 +43,7 @@ pub enum Action {
 
     // Commits
     CommitsLoaded(Vec<Commit>),
+    CommitDetailLoaded(Box<CommitDetail>),
 
     // Actions (workflow runs)
     ActionRunsLoaded(Vec<ActionRun>),

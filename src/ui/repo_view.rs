@@ -259,8 +259,10 @@ fn render_commits(frame: &mut Frame, app: &App, area: Rect) {
 
             let age = format_age(commit.date);
 
+            let short_sha = &commit.sha[..7.min(commit.sha.len())];
+
             let line = Line::from(vec![
-                Span::styled(&commit.sha, Style::default().fg(Color::Yellow)),
+                Span::styled(short_sha, Style::default().fg(Color::Yellow)),
                 Span::raw(" "),
                 Span::styled(format!("{:<50}", message), style),
                 Span::raw(" "),

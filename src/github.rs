@@ -3,8 +3,9 @@ use octocrab::Octocrab;
 
 use crate::error::{GritError, Result};
 use crate::types::{
-    ActionConclusion, ActionRun, ActionStatus, ChecksStatus, Commit, Issue, IssueState, MyPr,
-    PrState, PrStats, PrSummary, PullRequest, Repository, ReviewRequest,
+    ActionConclusion, ActionRun, ActionStatus, ChecksStatus, Commit, CommitDetail, CommitFile,
+    CommitStats, Issue, IssueState, MyPr, PrState, PrStats, PrSummary, PullRequest, Repository,
+    ReviewRequest,
 };
 
 pub struct GitHub {
@@ -292,7 +293,7 @@ impl GitHub {
                     .unwrap_or_else(chrono::Utc::now);
 
                 Commit {
-                    sha: c.sha[..7].to_string(),
+                    sha: c.sha,
                     message,
                     author,
                     date,
@@ -301,6 +302,83 @@ impl GitHub {
             .collect();
 
         Ok(result)
+    }
+
+    /// Get commit detail with files changed
+    pub async fn get_commit(&self, owner: &str, repo: &str, sha: &str) -> Result<CommitDetail> {
+        let url = format!("/repos/{}/{}/commits/{}", owner, repo, sha);
+        let response: serde_json::Value = self.client.get(&url, None::<&()>).await?;
+
+        let message = response
+            .get("commit")
+            .and_then(|c| c.get("message"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let author = response
+            .get("author")
+            .and_then(|a| a.get("login"))
+            .and_then(|l| l.as_str())
+            .or_else(|| {
+                response
+                    .get("commit")
+                    .and_then(|c| c.get("author"))
+                    .and_then(|a| a.get("name"))
+                    .and_then(|n| n.as_str())
+            })
+            .unwrap_or("unknown")
+            .to_string();
+
+        let date = response
+            .get("commit")
+            .and_then(|c| c.get("author"))
+            .and_then(|a| a.get("date"))
+            .and_then(|d| d.as_str())
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|d| d.with_timezone(&chrono::Utc))
+            .unwrap_or_else(chrono::Utc::now);
+
+        let stats = response
+            .get("stats")
+            .map(|s| CommitStats {
+                additions: s.get("additions").and_then(|a| a.as_u64()).unwrap_or(0),
+                deletions: s.get("deletions").and_then(|d| d.as_u64()).unwrap_or(0),
+                total: s.get("total").and_then(|t| t.as_u64()).unwrap_or(0),
+            })
+            .unwrap_or(CommitStats {
+                additions: 0,
+                deletions: 0,
+                total: 0,
+            });
+
+        let files = response
+            .get("files")
+            .and_then(|f| f.as_array())
+            .map(|files| {
+                files
+                    .iter()
+                    .filter_map(|f| {
+                        Some(CommitFile {
+                            filename: f.get("filename")?.as_str()?.to_string(),
+                            status: f.get("status")?.as_str()?.to_string(),
+                            additions: f.get("additions").and_then(|a| a.as_u64()).unwrap_or(0),
+                            deletions: f.get("deletions").and_then(|d| d.as_u64()).unwrap_or(0),
+                            patch: f.get("patch").and_then(|p| p.as_str()).map(|s| s.to_string()),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(CommitDetail {
+            sha: sha.to_string(),
+            message,
+            author,
+            date,
+            stats,
+            files,
+        })
     }
 
     /// List GitHub Actions workflow runs for a repository

@@ -29,13 +29,40 @@ impl std::fmt::Display for IssueState {
     }
 }
 
-/// Git Commit
+/// Git Commit (summary for list view)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Commit {
     pub sha: String,
     pub message: String,
     pub author: String,
     pub date: DateTime<Utc>,
+}
+
+/// Git Commit (full detail)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitDetail {
+    pub sha: String,
+    pub message: String,
+    pub author: String,
+    pub date: DateTime<Utc>,
+    pub stats: CommitStats,
+    pub files: Vec<CommitFile>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitStats {
+    pub additions: u64,
+    pub deletions: u64,
+    pub total: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitFile {
+    pub filename: String,
+    pub status: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub patch: Option<String>,
 }
 
 /// GitHub Actions workflow run

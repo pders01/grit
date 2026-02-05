@@ -6,14 +6,15 @@ use tokio::sync::mpsc;
 use crate::action::{Action, RepoTab};
 use crate::event::Event;
 use crate::github::GitHub;
-use crate::types::{ActionRun, Commit, Issue, MyPr, PrSummary, PullRequest, Repository, ReviewRequest};
+use crate::types::{ActionRun, Commit, CommitDetail, Issue, MyPr, PrSummary, PullRequest, Repository, ReviewRequest};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Screen {
-    Home,     // Dashboard with review requests + your PRs
-    RepoList, // Repository browser
-    RepoView, // Repo view with tabs (PRs, Issues, Commits, Actions)
-    PrDetail, // PR detail view
+    Home,         // Dashboard with review requests + your PRs
+    RepoList,     // Repository browser
+    RepoView,     // Repo view with tabs (PRs, Issues, Commits, Actions)
+    PrDetail,     // PR detail view
+    CommitDetail, // Commit detail view
 }
 
 /// Section of the home screen
@@ -49,6 +50,7 @@ pub struct App {
     pub repos: Vec<Repository>,
     pub prs: Vec<PrSummary>,
     pub current_pr: Option<PullRequest>,
+    pub current_commit: Option<CommitDetail>,
     pub repo_index: usize,
     pub pr_index: usize,
     pub scroll_offset: usize,
@@ -88,6 +90,7 @@ impl App {
             repos: Vec::new(),
             prs: Vec::new(),
             current_pr: None,
+            current_commit: None,
             repo_index: 0,
             pr_index: 0,
             scroll_offset: 0,
@@ -214,6 +217,12 @@ impl App {
                         self.scroll_offset = 0;
                         self.prev_screen = None;
                     }
+                    Screen::CommitDetail => {
+                        self.screen = self.prev_screen.unwrap_or(Screen::RepoView);
+                        self.current_commit = None;
+                        self.scroll_offset = 0;
+                        self.prev_screen = None;
+                    }
                 }
             }
             Action::ScrollUp => match self.screen {
@@ -256,7 +265,7 @@ impl App {
                         }
                     }
                 },
-                Screen::PrDetail => {
+                Screen::PrDetail | Screen::CommitDetail => {
                     if self.scroll_offset > 0 {
                         self.scroll_offset -= 1;
                     }
@@ -306,7 +315,7 @@ impl App {
                         }
                     }
                 },
-                Screen::PrDetail => {
+                Screen::PrDetail | Screen::CommitDetail => {
                     self.scroll_offset += 1;
                 }
             },
@@ -354,13 +363,25 @@ impl App {
                                     self.spawn_load_pr_detail(owner.clone(), repo.clone(), pr.number);
                                 }
                             }
-                            RepoTab::Issues | RepoTab::Commits | RepoTab::Actions => {
-                                // View-only for now - no detail view implemented
+                            RepoTab::Issues => {
+                                // TODO: Issue detail view
+                            }
+                            RepoTab::Commits => {
+                                if let Some(commit) = self.commits.get(self.commit_index) {
+                                    self.spawn_load_commit_detail(
+                                        owner.clone(),
+                                        repo.clone(),
+                                        commit.sha.clone(),
+                                    );
+                                }
+                            }
+                            RepoTab::Actions => {
+                                // TODO: Action run detail view
                             }
                         }
                     }
                 }
-                Screen::PrDetail => {}
+                Screen::PrDetail | Screen::CommitDetail => {}
             },
 
             // Home screen actions
@@ -447,6 +468,13 @@ impl App {
                 self.loading = false;
                 self.commits = commits;
                 self.commit_index = 0;
+            }
+            Action::CommitDetailLoaded(commit) => {
+                self.loading = false;
+                self.prev_screen = Some(self.screen);
+                self.current_commit = Some(*commit);
+                self.scroll_offset = 0;
+                self.screen = Screen::CommitDetail;
             }
 
             // Actions (workflow runs)
@@ -580,6 +608,21 @@ impl App {
             match github.list_action_runs(&owner, &repo).await {
                 Ok(runs) => {
                     tx.send(Action::ActionRunsLoaded(runs)).ok();
+                }
+                Err(e) => {
+                    tx.send(Action::Error(e.to_string())).ok();
+                }
+            }
+        });
+    }
+
+    fn spawn_load_commit_detail(&self, owner: String, repo: String, sha: String) {
+        let tx = self.action_tx.clone();
+        let github = Arc::clone(&self.github);
+        tokio::spawn(async move {
+            match github.get_commit(&owner, &repo, &sha).await {
+                Ok(commit) => {
+                    tx.send(Action::CommitDetailLoaded(Box::new(commit))).ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();

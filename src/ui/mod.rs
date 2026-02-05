@@ -1,3 +1,4 @@
+mod commit_detail;
 mod home;
 mod pr_detail;
 mod repo_list;
@@ -28,6 +29,7 @@ pub fn render(frame: &mut Frame, app: &App) {
         Screen::RepoList => repo_list::render(frame, app, chunks[1]),
         Screen::RepoView => repo_view::render(frame, app, chunks[1]),
         Screen::PrDetail => pr_detail::render(frame, app, chunks[1]),
+        Screen::CommitDetail => commit_detail::render(frame, app, chunks[1]),
     }
 
     render_status_bar(frame, app, chunks[2]);
@@ -49,6 +51,20 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
                 format!("grit - PR #{}: {}", pr.number, pr.title)
             } else {
                 "grit - Pull Request".to_string()
+            }
+        }
+        Screen::CommitDetail => {
+            if let Some(commit) = &app.current_commit {
+                let short_sha = &commit.sha[..7.min(commit.sha.len())];
+                let msg_line = commit.message.lines().next().unwrap_or("");
+                let msg = if msg_line.len() > 50 {
+                    format!("{}...", &msg_line[..47])
+                } else {
+                    msg_line.to_string()
+                };
+                format!("grit - Commit {}: {}", short_sha, msg)
+            } else {
+                "grit - Commit".to_string()
             }
         }
     };
@@ -80,7 +96,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             Screen::Home => "Tab: switch section | j/k: navigate | Enter: open PR | r: repos | q: quit",
             Screen::RepoList => "j/k: navigate | Enter: select | Esc: home | q: back",
             Screen::RepoView => "p/i/c/a: switch tab | Tab: cycle | j/k: navigate | Enter: open | Esc: back",
-            Screen::PrDetail => "j/k: scroll | Esc: back | q: back",
+            Screen::PrDetail | Screen::CommitDetail => "j/k: scroll | Esc: back | q: back",
         };
         Line::from(vec![Span::styled(help, Style::default().fg(Color::Gray))])
     };

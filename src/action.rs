@@ -17,7 +17,13 @@ pub enum Action {
     Back,
     ScrollUp,
     ScrollDown,
+    PageUp,
+    PageDown,
+    GoToTop,
+    GoToBottom,
     Select,
+    NextTab,
+    PrevTab,
 
     // Home screen
     LoadHome,
@@ -25,7 +31,6 @@ pub enum Action {
         review_requests: Vec<ReviewRequest>,
         my_prs: Vec<MyPr>,
     },
-    SwitchHomeSection, // Tab to switch between review requests and my PRs
 
     // Navigation
     SwitchRepoTab(RepoTab),

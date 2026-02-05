@@ -113,6 +113,8 @@ impl App {
     }
 
     fn handle_key(&self, key: KeyEvent) -> Action {
+        use crossterm::event::KeyModifiers;
+
         match key.code {
             KeyCode::Char('q') => {
                 if self.screen == Screen::Home {
@@ -125,25 +127,27 @@ impl App {
                 Screen::Home => Action::Quit,
                 _ => Action::Back,
             },
+
+            // Vim navigation
             KeyCode::Char('j') | KeyCode::Down => Action::ScrollDown,
             KeyCode::Char('k') | KeyCode::Up => Action::ScrollUp,
+            KeyCode::Char('g') | KeyCode::Home => Action::GoToTop,
+            KeyCode::Char('G') | KeyCode::End => Action::GoToBottom,
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::PageDown,
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::PageUp,
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::PageDown,
+            KeyCode::Char('b') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::PageUp,
+            KeyCode::PageDown => Action::PageDown,
+            KeyCode::PageUp => Action::PageUp,
+
+            // Tab/section navigation
+            KeyCode::Char('h') | KeyCode::Left => Action::PrevTab,
+            KeyCode::Char('l') | KeyCode::Right => Action::NextTab,
+            KeyCode::Tab => Action::NextTab,
+            KeyCode::BackTab => Action::PrevTab,
+
             KeyCode::Enter => Action::Select,
-            KeyCode::Tab => {
-                if self.screen == Screen::Home {
-                    Action::SwitchHomeSection
-                } else if self.screen == Screen::RepoView {
-                    // Cycle through tabs
-                    let next = match self.repo_tab {
-                        RepoTab::PullRequests => RepoTab::Issues,
-                        RepoTab::Issues => RepoTab::Commits,
-                        RepoTab::Commits => RepoTab::Actions,
-                        RepoTab::Actions => RepoTab::PullRequests,
-                    };
-                    Action::SwitchRepoTab(next)
-                } else {
-                    Action::None
-                }
-            }
+
             KeyCode::Char('r') => {
                 if self.screen == Screen::Home {
                     Action::LoadRepos
@@ -319,6 +323,203 @@ impl App {
                     self.scroll_offset += 1;
                 }
             },
+
+            // Vim: go to top (gg, g, Home)
+            Action::GoToTop => match self.screen {
+                Screen::Home => match self.home_section {
+                    HomeSection::ReviewRequests => self.review_index = 0,
+                    HomeSection::MyPrs => self.my_pr_index = 0,
+                },
+                Screen::RepoList => self.repo_index = 0,
+                Screen::RepoView => match self.repo_tab {
+                    RepoTab::PullRequests => self.pr_index = 0,
+                    RepoTab::Issues => self.issue_index = 0,
+                    RepoTab::Commits => self.commit_index = 0,
+                    RepoTab::Actions => self.action_index = 0,
+                },
+                Screen::PrDetail | Screen::CommitDetail => self.scroll_offset = 0,
+            },
+
+            // Vim: go to bottom (G, End)
+            Action::GoToBottom => match self.screen {
+                Screen::Home => match self.home_section {
+                    HomeSection::ReviewRequests => {
+                        if !self.review_requests.is_empty() {
+                            self.review_index = self.review_requests.len() - 1;
+                        }
+                    }
+                    HomeSection::MyPrs => {
+                        if !self.my_prs.is_empty() {
+                            self.my_pr_index = self.my_prs.len() - 1;
+                        }
+                    }
+                },
+                Screen::RepoList => {
+                    if !self.repos.is_empty() {
+                        self.repo_index = self.repos.len() - 1;
+                    }
+                }
+                Screen::RepoView => match self.repo_tab {
+                    RepoTab::PullRequests => {
+                        if !self.prs.is_empty() {
+                            self.pr_index = self.prs.len() - 1;
+                        }
+                    }
+                    RepoTab::Issues => {
+                        if !self.issues.is_empty() {
+                            self.issue_index = self.issues.len() - 1;
+                        }
+                    }
+                    RepoTab::Commits => {
+                        if !self.commits.is_empty() {
+                            self.commit_index = self.commits.len() - 1;
+                        }
+                    }
+                    RepoTab::Actions => {
+                        if !self.action_runs.is_empty() {
+                            self.action_index = self.action_runs.len() - 1;
+                        }
+                    }
+                },
+                Screen::PrDetail | Screen::CommitDetail => {
+                    // Scroll to a large offset (will be clamped by rendering)
+                    self.scroll_offset = 1000;
+                }
+            },
+
+            // Vim: page up (Ctrl+u, Ctrl+b, PageUp)
+            Action::PageUp => {
+                let page_size = 10;
+                match self.screen {
+                    Screen::Home => match self.home_section {
+                        HomeSection::ReviewRequests => {
+                            self.review_index = self.review_index.saturating_sub(page_size);
+                        }
+                        HomeSection::MyPrs => {
+                            self.my_pr_index = self.my_pr_index.saturating_sub(page_size);
+                        }
+                    },
+                    Screen::RepoList => {
+                        self.repo_index = self.repo_index.saturating_sub(page_size);
+                    }
+                    Screen::RepoView => match self.repo_tab {
+                        RepoTab::PullRequests => {
+                            self.pr_index = self.pr_index.saturating_sub(page_size);
+                        }
+                        RepoTab::Issues => {
+                            self.issue_index = self.issue_index.saturating_sub(page_size);
+                        }
+                        RepoTab::Commits => {
+                            self.commit_index = self.commit_index.saturating_sub(page_size);
+                        }
+                        RepoTab::Actions => {
+                            self.action_index = self.action_index.saturating_sub(page_size);
+                        }
+                    },
+                    Screen::PrDetail | Screen::CommitDetail => {
+                        self.scroll_offset = self.scroll_offset.saturating_sub(page_size);
+                    }
+                }
+            }
+
+            // Vim: page down (Ctrl+d, Ctrl+f, PageDown)
+            Action::PageDown => {
+                let page_size = 10;
+                match self.screen {
+                    Screen::Home => match self.home_section {
+                        HomeSection::ReviewRequests => {
+                            let max = self.review_requests.len().saturating_sub(1);
+                            self.review_index = (self.review_index + page_size).min(max);
+                        }
+                        HomeSection::MyPrs => {
+                            let max = self.my_prs.len().saturating_sub(1);
+                            self.my_pr_index = (self.my_pr_index + page_size).min(max);
+                        }
+                    },
+                    Screen::RepoList => {
+                        let max = self.repos.len().saturating_sub(1);
+                        self.repo_index = (self.repo_index + page_size).min(max);
+                    }
+                    Screen::RepoView => match self.repo_tab {
+                        RepoTab::PullRequests => {
+                            let max = self.prs.len().saturating_sub(1);
+                            self.pr_index = (self.pr_index + page_size).min(max);
+                        }
+                        RepoTab::Issues => {
+                            let max = self.issues.len().saturating_sub(1);
+                            self.issue_index = (self.issue_index + page_size).min(max);
+                        }
+                        RepoTab::Commits => {
+                            let max = self.commits.len().saturating_sub(1);
+                            self.commit_index = (self.commit_index + page_size).min(max);
+                        }
+                        RepoTab::Actions => {
+                            let max = self.action_runs.len().saturating_sub(1);
+                            self.action_index = (self.action_index + page_size).min(max);
+                        }
+                    },
+                    Screen::PrDetail | Screen::CommitDetail => {
+                        self.scroll_offset += page_size;
+                    }
+                }
+            }
+
+            // Tab navigation (h/l, Tab/Shift+Tab, Left/Right)
+            Action::NextTab => match self.screen {
+                Screen::Home => {
+                    self.home_section = match self.home_section {
+                        HomeSection::ReviewRequests => HomeSection::MyPrs,
+                        HomeSection::MyPrs => HomeSection::ReviewRequests,
+                    };
+                }
+                Screen::RepoView => {
+                    let next = match self.repo_tab {
+                        RepoTab::PullRequests => RepoTab::Issues,
+                        RepoTab::Issues => RepoTab::Commits,
+                        RepoTab::Commits => RepoTab::Actions,
+                        RepoTab::Actions => RepoTab::PullRequests,
+                    };
+                    self.repo_tab = next;
+                    if let Some((owner, repo)) = &self.current_repo {
+                        self.loading = true;
+                        match next {
+                            RepoTab::PullRequests => self.spawn_load_prs(owner.clone(), repo.clone()),
+                            RepoTab::Issues => self.spawn_load_issues(owner.clone(), repo.clone()),
+                            RepoTab::Commits => self.spawn_load_commits(owner.clone(), repo.clone()),
+                            RepoTab::Actions => self.spawn_load_action_runs(owner.clone(), repo.clone()),
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Action::PrevTab => match self.screen {
+                Screen::Home => {
+                    self.home_section = match self.home_section {
+                        HomeSection::ReviewRequests => HomeSection::MyPrs,
+                        HomeSection::MyPrs => HomeSection::ReviewRequests,
+                    };
+                }
+                Screen::RepoView => {
+                    let prev = match self.repo_tab {
+                        RepoTab::PullRequests => RepoTab::Actions,
+                        RepoTab::Issues => RepoTab::PullRequests,
+                        RepoTab::Commits => RepoTab::Issues,
+                        RepoTab::Actions => RepoTab::Commits,
+                    };
+                    self.repo_tab = prev;
+                    if let Some((owner, repo)) = &self.current_repo {
+                        self.loading = true;
+                        match prev {
+                            RepoTab::PullRequests => self.spawn_load_prs(owner.clone(), repo.clone()),
+                            RepoTab::Issues => self.spawn_load_issues(owner.clone(), repo.clone()),
+                            RepoTab::Commits => self.spawn_load_commits(owner.clone(), repo.clone()),
+                            RepoTab::Actions => self.spawn_load_action_runs(owner.clone(), repo.clone()),
+                        }
+                    }
+                }
+                _ => {}
+            },
+
             Action::Select => match self.screen {
                 Screen::Home => {
                     // Select a review request or my PR -> load PR detail
@@ -400,13 +601,6 @@ impl App {
                 self.my_pr_index = 0;
                 self.screen = Screen::Home;
             }
-            Action::SwitchHomeSection => {
-                self.home_section = match self.home_section {
-                    HomeSection::ReviewRequests => HomeSection::MyPrs,
-                    HomeSection::MyPrs => HomeSection::ReviewRequests,
-                };
-            }
-
             // Navigation actions
             Action::SwitchRepoTab(tab) => {
                 self.repo_tab = tab;

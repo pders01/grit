@@ -93,10 +93,10 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         )])
     } else {
         let help = match app.screen {
-            Screen::Home => "Tab: switch section | j/k: navigate | Enter: open PR | r: repos | q: quit",
-            Screen::RepoList => "j/k: navigate | Enter: select | Esc: home | q: back",
-            Screen::RepoView => "p/i/c/a: switch tab | Tab: cycle | j/k: navigate | Enter: open | Esc: back",
-            Screen::PrDetail | Screen::CommitDetail => "j/k: scroll | Esc: back | q: back",
+            Screen::Home => "h/l: sections | j/k/g/G: nav | Ctrl+d/u: page | Enter: open | r: repos | q: quit",
+            Screen::RepoList => "j/k/g/G: nav | Ctrl+d/u: page | Enter: select | q: back",
+            Screen::RepoView => "h/l: tabs | j/k/g/G: nav | Ctrl+d/u: page | Enter: open | q: back",
+            Screen::PrDetail | Screen::CommitDetail => "j/k/g/G: scroll | Ctrl+d/u: page | q: back",
         };
         Line::from(vec![Span::styled(help, Style::default().fg(Color::Gray))])
     };

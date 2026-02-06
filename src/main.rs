@@ -31,7 +31,11 @@ use crate::github::GitHub;
 use crate::tui::EventHandler;
 
 #[derive(Parser)]
-#[command(name = "grit", about = "A TUI for browsing Git forge repositories")]
+#[command(
+    name = "grit",
+    version,
+    about = "A TUI for browsing Git forge repositories"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,

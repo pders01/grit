@@ -60,7 +60,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw("  "),
-                Span::styled(format!("{:<flex$}", description), Style::default().fg(Color::Gray)),
+                Span::styled(
+                    format!("{:<flex$}", description),
+                    Style::default().fg(Color::Gray),
+                ),
             ]);
 
             ListItem::new(line)

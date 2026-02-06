@@ -39,6 +39,10 @@ use crate::tui::EventHandler;
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
+
+    /// Start with a specific forge by name (must match a [[forges]] entry in config)
+    #[arg(long)]
+    forge: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -133,10 +137,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load config and detect forge
     let config = Config::load();
-    let forge_config = config::detect_forge(&config)
-        .or_else(|| config.forges.first())
-        .ok_or("No forge configured")?
-        .clone();
+    let forge_config = if let Some(ref name) = cli.forge {
+        config
+            .forges
+            .iter()
+            .find(|f| f.name == *name)
+            .ok_or_else(|| {
+                let available: Vec<&str> = config.forges.iter().map(|f| f.name.as_str()).collect();
+                format!(
+                    "No forge named '{}' in config. Available: {}",
+                    name,
+                    available.join(", ")
+                )
+            })?
+            .clone()
+    } else {
+        config::detect_forge(&config)
+            .or_else(|| config.forges.first())
+            .ok_or("No forge configured")?
+            .clone()
+    };
 
     // Load token for the detected forge
     let token = auth::load_forge_token(&forge_config)
@@ -151,7 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Run the application
-    let result = run(forge).await;
+    let result = run(forge, config.forges).await;
 
     // Restore terminal
     tui::restore()?;
@@ -165,7 +185,10 @@ enum SuspendAction {
     Editor(EditorContext),
 }
 
-async fn run(forge: Arc<dyn Forge>) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(
+    forge: Arc<dyn Forge>,
+    forge_configs: Vec<crate::config::ForgeConfig>,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize terminal
     let mut terminal = tui::init()?;
 
@@ -173,7 +196,7 @@ async fn run(forge: Arc<dyn Forge>) -> Result<(), Box<dyn std::error::Error>> {
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
 
     // Create app state
-    let mut app = App::new(forge, action_tx.clone());
+    let mut app = App::new(forge, action_tx.clone(), forge_configs);
 
     // Create event handler
     let tick_rate = Duration::from_millis(250);

@@ -15,6 +15,12 @@ pub struct GitHub {
     token: String,
 }
 
+impl std::fmt::Debug for GitHub {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitHub").finish_non_exhaustive()
+    }
+}
+
 impl From<octocrab::Error> for GritError {
     fn from(err: octocrab::Error) -> Self {
         GritError::Api(err.to_string())

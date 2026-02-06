@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use crate::error::GritError;
+use crate::forge::Forge;
 use crate::types::{
     ActionRun, Commit, CommitDetail, Issue, MergeMethod, MyPr, PrSummary, PullRequest, Repository,
     ReviewEvent, ReviewRequest,
@@ -135,6 +138,11 @@ pub enum Action {
     PopupUp,
     PopupDown,
     PopupSelect,
+
+    // Forge switching
+    ShowForgeSelect,
+    SwitchForge(usize),
+    ForgeReady(Arc<dyn Forge>, String),
 
     Error(String),
     None,

@@ -171,7 +171,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         ])
     } else {
         let help = match app.screen {
-            Screen::Home => "/ search | r repos | o open | y yank | Enter open | q quit",
+            Screen::Home => "/ search | r repos | f forge | o open | y yank | Enter open | q quit",
             Screen::RepoList => "/ search | r refresh | o open | y yank | Enter select | q back",
             Screen::RepoView => match app.repo_tab {
                 crate::action::RepoTab::Issues => {
@@ -188,7 +188,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 format!("[{}] ", app.forge_name),
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(Color::Gray)
                     .add_modifier(Modifier::DIM),
             ),
             Span::styled(help, Style::default().fg(Color::Gray)),

@@ -8,7 +8,7 @@ use crate::types::{
 
 #[async_trait]
 #[allow(dead_code)]
-pub trait Forge: Send + Sync {
+pub trait Forge: Send + Sync + std::fmt::Debug {
     fn name(&self) -> &str;
     fn web_url(&self, owner: &str, repo: &str, kind: &str, id: &str) -> String;
 

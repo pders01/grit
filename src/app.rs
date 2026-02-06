@@ -114,6 +114,7 @@ pub struct App {
     prev_screen: Option<Screen>,
     pub forge_name: String,
     forge: Arc<dyn Forge>,
+    pub forge_configs: Vec<crate::config::ForgeConfig>,
     action_tx: mpsc::UnboundedSender<Action>,
     load_id: u64,
 
@@ -126,7 +127,11 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(forge: Arc<dyn Forge>, action_tx: mpsc::UnboundedSender<Action>) -> Self {
+    pub fn new(
+        forge: Arc<dyn Forge>,
+        action_tx: mpsc::UnboundedSender<Action>,
+        forge_configs: Vec<crate::config::ForgeConfig>,
+    ) -> Self {
         let forge_name = forge.name().to_string();
         Self {
             screen: Screen::Home,
@@ -175,6 +180,7 @@ impl App {
             prev_screen: None,
             forge_name,
             forge,
+            forge_configs,
             action_tx,
             load_id: 0,
 
@@ -364,6 +370,10 @@ impl App {
             KeyCode::Char('a') if self.screen == Screen::RepoView => {
                 Action::SwitchRepoTab(RepoTab::Actions)
             }
+
+            // Forge switching
+            KeyCode::Char('f') if self.screen == Screen::Home => Action::ShowForgeSelect,
+
             _ => Action::None,
         }
     }
@@ -1296,7 +1306,107 @@ impl App {
                             ));
                         }
                     }
+                } else if self.popup_title == "Switch Forge" {
+                    let _ = self.action_tx.send(Action::SwitchForge(self.popup_index));
                 }
+            }
+
+            // Forge switching
+            Action::ShowForgeSelect => {
+                if self.forge_configs.len() <= 1 {
+                    return;
+                }
+                self.input_mode = InputMode::SelectPopup;
+                self.popup_title = "Switch Forge".to_string();
+                self.popup_items = self
+                    .forge_configs
+                    .iter()
+                    .map(|f| {
+                        if f.name == self.forge_name {
+                            format!("{} (active)", f.name)
+                        } else {
+                            f.name.clone()
+                        }
+                    })
+                    .collect();
+                self.popup_index = 0;
+            }
+            Action::SwitchForge(idx) => {
+                if let Some(fc) = self.forge_configs.get(idx) {
+                    if fc.name == self.forge_name {
+                        return;
+                    }
+                    let fc = fc.clone();
+                    let tx = self.action_tx.clone();
+                    self.loading = true;
+                    self.error = None;
+                    tokio::spawn(async move {
+                        match crate::auth::load_forge_token(&fc).await {
+                            Ok(token) => {
+                                let forge: Arc<dyn crate::forge::Forge> = match fc.forge_type {
+                                    crate::config::ForgeType::GitHub => {
+                                        match crate::github::GitHub::new(token) {
+                                            Ok(gh) => Arc::new(gh),
+                                            Err(e) => {
+                                                tx.send(Action::Error(e.to_string())).ok();
+                                                return;
+                                            }
+                                        }
+                                    }
+                                    crate::config::ForgeType::GitLab => {
+                                        Arc::new(crate::gitlab::GitLab::new(fc.host.clone(), token))
+                                    }
+                                    crate::config::ForgeType::Gitea => {
+                                        Arc::new(crate::gitea::Gitea::new(fc.host.clone(), token))
+                                    }
+                                };
+                                tx.send(Action::ForgeReady(forge, fc.name.clone())).ok();
+                            }
+                            Err(e) => {
+                                tx.send(Action::Error(e)).ok();
+                            }
+                        }
+                    });
+                }
+            }
+            Action::ForgeReady(new_forge, name) => {
+                self.forge = new_forge;
+                self.forge_name = name;
+                self.loading = false;
+
+                // Clear all data
+                self.repos.clear();
+                self.prs.clear();
+                self.issues.clear();
+                self.commits.clear();
+                self.action_runs.clear();
+                self.review_requests.clear();
+                self.my_prs.clear();
+                self.current_pr = None;
+                self.current_commit = None;
+                self.current_repo = None;
+
+                // Reset indices
+                self.repo_index = 0;
+                self.pr_index = 0;
+                self.issue_index = 0;
+                self.commit_index = 0;
+                self.action_index = 0;
+                self.review_index = 0;
+                self.my_pr_index = 0;
+                self.scroll_offset = 0;
+
+                // Reset pagination
+                self.repos_pagination = PaginationState::default();
+                self.prs_pagination = PaginationState::default();
+                self.issues_pagination = PaginationState::default();
+                self.commits_pagination = PaginationState::default();
+                self.actions_pagination = PaginationState::default();
+
+                // Navigate home and reload
+                self.screen = Screen::Home;
+                self.home_section = HomeSection::default();
+                let _ = self.action_tx.send(Action::LoadHome);
             }
 
             // Mutation results
@@ -1538,9 +1648,10 @@ impl App {
     fn spawn_load_home(&self, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
+        let cache_key = format!("{}_home", self.forge_name);
 
         // Serve from cache immediately
-        if let Some(cached) = cache::read::<HomeData>("home") {
+        if let Some(cached) = cache::read::<HomeData>(&cache_key) {
             tx.send(Action::HomeLoaded {
                 review_requests: cached.review_requests,
                 my_prs: cached.my_prs,
@@ -1567,7 +1678,7 @@ impl App {
             match (review_result, my_prs_result) {
                 (Ok(review_requests), Ok(my_prs)) => {
                     cache::write(
-                        "home",
+                        &cache_key,
                         &HomeData {
                             review_requests: review_requests.clone(),
                             my_prs: my_prs.clone(),
@@ -1590,15 +1701,16 @@ impl App {
     fn spawn_load_repos(&self, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
+        let cache_key = format!("{}_repos", self.forge_name);
 
-        if let Some(cached) = cache::read::<Vec<Repository>>("repos") {
+        if let Some(cached) = cache::read::<Vec<Repository>>(&cache_key) {
             tx.send(Action::ReposLoaded(cached, load_id)).ok();
         }
 
         tokio::spawn(async move {
             match forge.list_repos(1).await {
                 Ok(repos) => {
-                    cache::write("repos", &repos);
+                    cache::write(&cache_key, &repos);
                     tx.send(Action::ReposLoaded(repos, load_id)).ok();
                 }
                 Err(e) => {
@@ -1611,7 +1723,7 @@ impl App {
     fn spawn_load_prs(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("prs_{}", cache::repo_key(&owner, &repo));
+        let key = format!("prs_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo));
 
         if let Some(cached) = cache::read::<Vec<PrSummary>>(&key) {
             tx.send(Action::PrsLoaded(cached, load_id)).ok();
@@ -1633,7 +1745,7 @@ impl App {
     fn spawn_load_pr_detail(&self, owner: String, repo: String, number: u64, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("pr_{}_{}", cache::repo_key(&owner, &repo), number);
+        let key = format!("pr_{}_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo), number);
 
         if let Some(cached) = cache::read::<PullRequest>(&key) {
             tx.send(Action::PrDetailLoaded(Box::new(cached), load_id))
@@ -1656,7 +1768,7 @@ impl App {
     fn spawn_load_issues(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("issues_{}", cache::repo_key(&owner, &repo));
+        let key = format!("issues_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo));
 
         if let Some(cached) = cache::read::<Vec<Issue>>(&key) {
             tx.send(Action::IssuesLoaded(cached, load_id)).ok();
@@ -1678,7 +1790,7 @@ impl App {
     fn spawn_load_commits(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("commits_{}", cache::repo_key(&owner, &repo));
+        let key = format!("commits_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo));
 
         if let Some(cached) = cache::read::<Vec<Commit>>(&key) {
             tx.send(Action::CommitsLoaded(cached, load_id)).ok();
@@ -1700,7 +1812,7 @@ impl App {
     fn spawn_load_action_runs(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("actions_{}", cache::repo_key(&owner, &repo));
+        let key = format!("actions_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo));
 
         if let Some(cached) = cache::read::<Vec<ActionRun>>(&key) {
             tx.send(Action::ActionRunsLoaded(cached, load_id)).ok();
@@ -1926,7 +2038,7 @@ impl App {
         let forge = Arc::clone(&self.forge);
         let key = format!(
             "commit_{}_{}",
-            cache::repo_key(&owner, &repo),
+            cache::forge_repo_key(&self.forge_name, &owner, &repo),
             &sha[..7.min(sha.len())]
         );
 
@@ -2145,7 +2257,7 @@ mod tests {
         let github = GitHub::new("dummy_token".to_string()).unwrap();
         let forge: Arc<dyn Forge> = Arc::new(github);
         let (tx, rx) = mpsc::unbounded_channel();
-        (App::new(forge, tx), rx)
+        (App::new(forge, tx, vec![]), rx)
     }
 
     fn key(code: KeyCode) -> Event {

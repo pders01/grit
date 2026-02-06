@@ -15,6 +15,12 @@ pub struct GitLab {
     token: String,
 }
 
+impl std::fmt::Debug for GitLab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GitLab").field("host", &self.host).finish_non_exhaustive()
+    }
+}
+
 impl GitLab {
     pub fn new(host: String, token: String) -> Self {
         Self {

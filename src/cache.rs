@@ -34,7 +34,6 @@ pub fn repo_key(owner: &str, repo: &str) -> String {
 }
 
 /// Namespace cache key by forge name for multi-forge support
-#[allow(dead_code)]
 pub fn forge_repo_key(forge: &str, owner: &str, repo: &str) -> String {
     format!("{}_{}", forge, repo_key(owner, repo))
 }

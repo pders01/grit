@@ -15,6 +15,12 @@ pub struct Gitea {
     token: String,
 }
 
+impl std::fmt::Debug for Gitea {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Gitea").field("host", &self.host).finish_non_exhaustive()
+    }
+}
+
 impl Gitea {
     pub fn new(host: String, token: String) -> Self {
         Self {

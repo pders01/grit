@@ -259,9 +259,15 @@ impl App {
             KeyCode::PageDown => Action::PageDown,
             KeyCode::PageUp => Action::PageUp,
 
-            // Tab/section navigation
-            KeyCode::Char('h') | KeyCode::Left => Action::PrevTab,
-            KeyCode::Char('l') | KeyCode::Right => Action::NextTab,
+            // Tab/section navigation (h/l switch tabs on tabbed screens, back/select on others)
+            KeyCode::Char('h') | KeyCode::Left => match self.screen {
+                Screen::Home | Screen::RepoView => Action::PrevTab,
+                _ => Action::Back,
+            },
+            KeyCode::Char('l') | KeyCode::Right => match self.screen {
+                Screen::Home | Screen::RepoView => Action::NextTab,
+                _ => Action::Select,
+            },
             KeyCode::Tab => Action::NextTab,
             KeyCode::BackTab => Action::PrevTab,
 

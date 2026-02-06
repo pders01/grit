@@ -184,7 +184,15 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
             }
             Screen::CommitDetail => "d diff | / search | o open | y yank | q back",
         };
-        Line::from(vec![Span::styled(help, Style::default().fg(Color::Gray))])
+        Line::from(vec![
+            Span::styled(
+                format!("[{}] ", app.forge_name),
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::DIM),
+            ),
+            Span::styled(help, Style::default().fg(Color::Gray)),
+        ])
     };
 
     let status_bar = Paragraph::new(status).style(Style::default().bg(Color::DarkGray));

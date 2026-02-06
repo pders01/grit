@@ -112,6 +112,7 @@ pub struct App {
     pub should_quit: bool,
     pub current_repo: Option<(String, String)>,
     prev_screen: Option<Screen>,
+    pub forge_name: String,
     forge: Arc<dyn Forge>,
     action_tx: mpsc::UnboundedSender<Action>,
     load_id: u64,
@@ -126,6 +127,7 @@ pub struct App {
 
 impl App {
     pub fn new(forge: Arc<dyn Forge>, action_tx: mpsc::UnboundedSender<Action>) -> Self {
+        let forge_name = forge.name().to_string();
         Self {
             screen: Screen::Home,
             input_mode: InputMode::Normal,
@@ -171,6 +173,7 @@ impl App {
             should_quit: false,
             current_repo: None,
             prev_screen: None,
+            forge_name,
             forge,
             action_tx,
             load_id: 0,

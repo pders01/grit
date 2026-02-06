@@ -58,7 +58,7 @@ impl Config {
     /// Returns a documented example config file as a static string.
     pub fn example_toml() -> &'static str {
         r#"# grit configuration file
-# Location: ~/.config/grit/config.toml
+# Run `grit config path` to see the config file location on your system.
 #
 # grit auto-detects which forge to use by matching your git remote's
 # hostname against the configured forges below. If no match is found,
@@ -101,19 +101,37 @@ token_command = "gh auth token"   # fallback: run this command to get token
             return Config::default();
         };
 
-        let Ok(content) = std::fs::read_to_string(&path) else {
-            return Config::default();
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Config::default();
+            }
+            Err(e) => {
+                eprintln!(
+                    "grit: warning: could not read config file {}: {}",
+                    path.display(),
+                    e
+                );
+                return Config::default();
+            }
         };
 
         match toml::from_str::<Config>(&content) {
             Ok(config) => {
                 if config.forges.is_empty() {
+                    eprintln!(
+                        "grit: warning: config file {} has no [[forges]] entries, using defaults",
+                        path.display()
+                    );
                     Config::default()
                 } else {
                     config
                 }
             }
-            Err(_) => Config::default(),
+            Err(e) => {
+                eprintln!("grit: warning: failed to parse {}: {}", path.display(), e);
+                Config::default()
+            }
         }
     }
 }

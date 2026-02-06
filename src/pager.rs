@@ -27,18 +27,23 @@ pub fn detect_pager() -> String {
     "less".to_string()
 }
 
-/// Write content to a temp file and open it in the pager.
-/// The pager gets the file path as an argument so it can mmap/read directly -
-/// no IPC piping overhead.
+/// Pipe content to the pager's stdin, the same way git does it.
+/// This works with all pagers (less, delta, bat, etc.) since they all
+/// read from stdin when used as a pager.
 pub fn open_pager(content: &str, pager_cmd: &str) -> std::io::Result<()> {
-    let tmp = std::env::temp_dir().join(format!("grit-diff-{}.diff", std::process::id()));
-    std::fs::write(&tmp, content)?;
+    use std::io::Write;
+    use std::process::Stdio;
 
-    let status = Command::new("sh")
-        .args(["-c", &format!("{} {}", pager_cmd, tmp.display())])
-        .status();
+    let mut child = Command::new("sh")
+        .args(["-c", pager_cmd])
+        .stdin(Stdio::piped())
+        .spawn()?;
 
-    let _ = std::fs::remove_file(&tmp);
-    status?;
+    if let Some(mut stdin) = child.stdin.take() {
+        // Write all content then drop to close the pipe (signals EOF)
+        let _ = stdin.write_all(content.as_bytes());
+    }
+
+    child.wait()?;
     Ok(())
 }

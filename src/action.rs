@@ -1,6 +1,7 @@
 use crate::error::GritError;
 use crate::types::{
-    ActionRun, Commit, CommitDetail, Issue, MyPr, PrSummary, PullRequest, Repository, ReviewRequest,
+    ActionRun, Commit, CommitDetail, Issue, MergeMethod, MyPr, PrSummary, PullRequest, Repository,
+    ReviewEvent, ReviewRequest,
 };
 
 /// Tab selection for repo view
@@ -13,7 +14,37 @@ pub enum RepoTab {
     Actions,
 }
 
+/// What to confirm
 #[derive(Debug, Clone)]
+pub enum ConfirmAction {
+    ClosePr(u64),
+    MergePr { number: u64, method: MergeMethod },
+    CloseIssue(u64),
+}
+
+/// Context for editor suspend
+#[derive(Debug, Clone)]
+pub enum EditorContext {
+    CommentOnPr {
+        owner: String,
+        repo: String,
+        number: u64,
+    },
+    CommentOnIssue {
+        owner: String,
+        repo: String,
+        number: u64,
+    },
+    ReviewPr {
+        owner: String,
+        repo: String,
+        number: u64,
+        event: ReviewEvent,
+    },
+}
+
+#[derive(Debug, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub enum Action {
     Quit,
     Back,
@@ -32,28 +63,71 @@ pub enum Action {
     HomeLoaded {
         review_requests: Vec<ReviewRequest>,
         my_prs: Vec<MyPr>,
+        load_id: u64,
     },
 
     // Navigation
     SwitchRepoTab(RepoTab),
 
     // Repo list
-    LoadRepos,
-    ReposLoaded(Vec<Repository>),
+    ReposLoaded(Vec<Repository>, u64),
 
     // PR operations
-    PrsLoaded(Vec<PrSummary>),
-    PrDetailLoaded(Box<PullRequest>),
+    PrsLoaded(Vec<PrSummary>, u64),
+    PrDetailLoaded(Box<PullRequest>, u64),
 
     // Issues
-    IssuesLoaded(Vec<Issue>),
+    IssuesLoaded(Vec<Issue>, u64),
 
     // Commits
-    CommitsLoaded(Vec<Commit>),
-    CommitDetailLoaded(Box<CommitDetail>),
+    CommitsLoaded(Vec<Commit>, u64),
+    CommitDetailLoaded(Box<CommitDetail>, u64),
 
     // Actions (workflow runs)
-    ActionRunsLoaded(Vec<ActionRun>),
+    ActionRunsLoaded(Vec<ActionRun>, u64),
+
+    // Search
+    EnterSearchMode,
+    ExitSearchMode,
+    SearchInput(char),
+    SearchBackspace,
+    SearchConfirm,
+    SearchNext,
+    SearchPrev,
+    ClearSearch,
+
+    // Pager
+    ViewDiff,
+    SuspendForPager(String),
+
+    // Polish
+    Refresh,
+    OpenInBrowser,
+    YankUrl,
+
+    // Mutations - PR
+    ShowMergeMethodSelect,
+    ShowConfirm(ConfirmAction),
+    ConfirmYes,
+    ConfirmNo,
+    PrMerged,
+    PrClosed,
+    CommentPosted,
+
+    // Mutations - Issue
+    IssueClosed,
+
+    // Review
+    ShowReviewSelect,
+    ReviewSubmitted,
+
+    // Editor
+    SuspendForEditor(EditorContext),
+
+    // Popup navigation
+    PopupUp,
+    PopupDown,
+    PopupSelect,
 
     Error(String),
     None,

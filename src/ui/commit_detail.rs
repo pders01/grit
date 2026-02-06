@@ -7,6 +7,8 @@ use ratatui::Frame;
 
 use crate::app::App;
 
+use super::highlight_line;
+
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let Some(commit) = &app.current_commit else {
         let block = Block::default().borders(Borders::ALL).title(" Commit ");
@@ -20,58 +22,75 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let short_sha = &commit.sha[..7.min(commit.sha.len())];
     let age = format_age(commit.date);
 
-    let mut lines: Vec<Line> = vec![
-        // Header
-        Line::from(vec![
-            Span::styled(
-                format!("Commit {}", short_sha),
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("@{}", commit.author),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::raw("  "),
-            Span::styled(age, Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-        // Stats
-        Line::from(vec![
-            Span::styled(
-                format!("+{}", commit.stats.additions),
-                Style::default().fg(Color::Green),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("-{}", commit.stats.deletions),
-                Style::default().fg(Color::Red),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("{} files changed", commit.files.len()),
-                Style::default().fg(Color::Gray),
-            ),
-        ]),
-        Line::from(""),
-        // Message
-        Line::from(Span::styled(
-            "Message:",
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-    ];
+    let mut lines: Vec<Line> = Vec::new();
+    let mut line_idx: usize = 0;
 
-    // Add commit message lines
+    // Header (line 0)
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("Commit {}", short_sha),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("@{}", commit.author),
+            Style::default().fg(Color::Cyan),
+        ),
+        Span::raw("  "),
+        Span::styled(age, Style::default().fg(Color::DarkGray)),
+    ]));
+    line_idx += 1;
+
+    // blank (line 1)
+    lines.push(Line::from(""));
+    line_idx += 1;
+
+    // Stats (line 2)
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("+{}", commit.stats.additions),
+            Style::default().fg(Color::Green),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("-{}", commit.stats.deletions),
+            Style::default().fg(Color::Red),
+        ),
+        Span::raw("  "),
+        Span::styled(
+            format!("{} files changed", commit.files.len()),
+            Style::default().fg(Color::Gray),
+        ),
+    ]));
+    line_idx += 1;
+
+    // blank (line 3)
+    lines.push(Line::from(""));
+    line_idx += 1;
+
+    // "Message:" (line 4)
+    lines.push(Line::from(Span::styled(
+        "Message:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+    line_idx += 1;
+
+    // Add commit message lines with search highlighting
     for msg_line in commit.message.lines() {
-        lines.push(Line::from(Span::styled(
-            format!("  {}", msg_line),
+        let text = format!("  {}", msg_line);
+        lines.push(highlight_line(
+            &text,
+            line_idx,
             Style::default().fg(Color::White),
-        )));
+            &app.search,
+        ));
+        line_idx += 1;
     }
 
     lines.push(Line::from(""));
+    line_idx += 1;
 
     // Add file diffs
     for file in &commit.files {
@@ -115,11 +134,11 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
             ),
             Span::styled(" ───", Style::default().fg(Color::DarkGray)),
         ]));
+        line_idx += 1;
 
         // Show diff if available
         if let Some(patch) = &file.patch {
             for diff_line in patch.lines() {
-                // Replace tabs with spaces to avoid rendering issues
                 let sanitized = diff_line.replace('\t', "    ");
 
                 let color = if sanitized.starts_with('+') && !sanitized.starts_with("+++") {
@@ -132,15 +151,22 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     Color::Gray
                 };
 
-                lines.push(Line::from(Span::styled(
-                    sanitized,
+                lines.push(highlight_line(
+                    &sanitized,
+                    line_idx,
                     Style::default().fg(color),
-                )));
+                    &app.search,
+                ));
+                line_idx += 1;
             }
         }
 
         lines.push(Line::from(""));
+        line_idx += 1;
     }
+
+    // Suppress unused variable warning
+    let _ = line_idx;
 
     let block = Block::default()
         .borders(Borders::ALL)

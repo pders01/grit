@@ -28,27 +28,34 @@ pub fn restore() -> io::Result<()> {
     disable_raw_mode()
 }
 
+/// Drain any pending crossterm events (e.g. leftover keystrokes after a pager exit).
+/// Must be called while raw mode is enabled.
+pub fn drain_events() {
+    while event::poll(Duration::ZERO).unwrap_or(false) {
+        let _ = event::read();
+    }
+}
+
 pub struct EventHandler {
     rx: mpsc::UnboundedReceiver<Event>,
-    _cancel: CancellationToken,
+    cancel: CancellationToken,
+    task: tokio::task::JoinHandle<()>,
 }
 
 impl EventHandler {
     pub fn new(tick_rate: Duration, render_rate: Duration) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
         let cancel = CancellationToken::new();
-        let _cancel = cancel.clone();
+        let task_cancel = cancel.clone();
 
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut reader = EventStream::new();
             let mut tick_interval = interval(tick_rate);
             let mut render_interval = interval(render_rate);
 
-            tx.send(Event::Init).ok();
-
             loop {
                 tokio::select! {
-                    _ = cancel.cancelled() => break,
+                    _ = task_cancel.cancelled() => break,
                     _ = tick_interval.tick() => {
                         tx.send(Event::Tick).ok();
                     }
@@ -56,23 +63,27 @@ impl EventHandler {
                         tx.send(Event::Render).ok();
                     }
                     Some(Ok(evt)) = reader.next() => {
-                        match evt {
-                            CrosstermEvent::Key(key) => {
-                                if key.kind == event::KeyEventKind::Press {
-                                    tx.send(Event::Key(key)).ok();
-                                }
+                        if let CrosstermEvent::Key(key) = evt {
+                            if key.kind == event::KeyEventKind::Press {
+                                tx.send(Event::Key(key)).ok();
                             }
-                            _ => {}
                         }
                     }
                 }
             }
         });
 
-        Self { rx, _cancel }
+        Self { rx, cancel, task }
     }
 
     pub async fn next(&mut self) -> Option<Event> {
         self.rx.recv().await
+    }
+}
+
+impl Drop for EventHandler {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        self.task.abort();
     }
 }

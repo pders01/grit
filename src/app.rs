@@ -3,11 +3,13 @@ use std::sync::Arc;
 use crossterm::event::{KeyCode, KeyEvent};
 use tokio::sync::mpsc;
 
-use crate::action::{Action, RepoTab};
+use crate::action::{Action, ConfirmAction, EditorContext, RepoTab};
+use crate::cache;
 use crate::event::Event;
 use crate::github::GitHub;
 use crate::types::{
-    ActionRun, Commit, CommitDetail, Issue, MyPr, PrSummary, PullRequest, Repository, ReviewRequest,
+    ActionRun, Commit, CommitDetail, HomeData, Issue, MyPr, PrSummary, PullRequest, Repository,
+    ReviewRequest,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,8 +29,37 @@ pub enum HomeSection {
     MyPrs,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputMode {
+    Normal,
+    Search,
+    Confirm,
+    SelectPopup,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SearchState {
+    pub query: String,
+    pub active: bool,
+    pub match_indices: Vec<usize>,
+    pub current_match: usize,
+    /// For content views: (line_index, byte_start, byte_end)
+    pub content_matches: Vec<(usize, usize, usize)>,
+}
+
 pub struct App {
     pub screen: Screen,
+    pub input_mode: InputMode,
+    pub search: SearchState,
+
+    // Popup state
+    pub confirm_action: Option<ConfirmAction>,
+    pub popup_items: Vec<String>,
+    pub popup_index: usize,
+    pub popup_title: String,
+
+    // Flash message (transient success messages)
+    pub flash_message: Option<(String, std::time::Instant)>,
 
     // Home screen data
     pub review_requests: Vec<ReviewRequest>,
@@ -63,12 +94,24 @@ pub struct App {
     prev_screen: Option<Screen>,
     github: Arc<GitHub>,
     action_tx: mpsc::UnboundedSender<Action>,
+    load_id: u64,
 }
 
 impl App {
     pub fn new(github: GitHub, action_tx: mpsc::UnboundedSender<Action>) -> Self {
         Self {
             screen: Screen::Home,
+            input_mode: InputMode::Normal,
+            search: SearchState::default(),
+
+            // Popup
+            confirm_action: None,
+            popup_items: Vec::new(),
+            popup_index: 0,
+            popup_title: String::new(),
+
+            // Flash
+            flash_message: None,
 
             // Home screen
             review_requests: Vec::new(),
@@ -103,18 +146,47 @@ impl App {
             prev_screen: None,
             github: Arc::new(github),
             action_tx,
+            load_id: 0,
         }
     }
 
     pub fn handle_event(&self, event: Event) -> Action {
         match event {
-            Event::Init => Action::LoadHome,
             Event::Key(key) => self.handle_key(key),
             _ => Action::None,
         }
     }
 
     fn handle_key(&self, key: KeyEvent) -> Action {
+        match &self.input_mode {
+            InputMode::Normal => self.handle_key_normal(key),
+            InputMode::Search => self.handle_key_search(key),
+            InputMode::Confirm => match key.code {
+                KeyCode::Char('y') => Action::ConfirmYes,
+                KeyCode::Char('n') | KeyCode::Esc => Action::ConfirmNo,
+                _ => Action::None,
+            },
+            InputMode::SelectPopup => match key.code {
+                KeyCode::Char('j') | KeyCode::Down => Action::PopupDown,
+                KeyCode::Char('k') | KeyCode::Up => Action::PopupUp,
+                KeyCode::Enter => Action::PopupSelect,
+                KeyCode::Esc => Action::ConfirmNo,
+                _ => Action::None,
+            },
+        }
+    }
+
+    fn handle_key_search(&self, key: KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => Action::ExitSearchMode,
+            KeyCode::Enter => Action::SearchConfirm,
+            KeyCode::Backspace => Action::SearchBackspace,
+            KeyCode::Char(c) => Action::SearchInput(c),
+            _ => Action::None,
+        }
+    }
+
+    fn handle_key_normal(&self, key: KeyEvent) -> Action {
         use crossterm::event::KeyModifiers;
 
         match key.code {
@@ -125,10 +197,21 @@ impl App {
                     Action::Back
                 }
             }
-            KeyCode::Esc => match self.screen {
-                Screen::Home => Action::Quit,
-                _ => Action::Back,
-            },
+            KeyCode::Esc => {
+                if self.search.active {
+                    Action::ClearSearch
+                } else {
+                    match self.screen {
+                        Screen::Home => Action::Quit,
+                        _ => Action::Back,
+                    }
+                }
+            }
+
+            // Search
+            KeyCode::Char('/') => Action::EnterSearchMode,
+            KeyCode::Char('n') if self.search.active => Action::SearchNext,
+            KeyCode::Char('N') if self.search.active => Action::SearchPrev,
 
             // Vim navigation
             KeyCode::Char('j') | KeyCode::Down => Action::ScrollDown,
@@ -150,51 +233,101 @@ impl App {
 
             KeyCode::Enter => Action::Select,
 
-            KeyCode::Char('r') => {
-                if self.screen == Screen::Home {
-                    Action::LoadRepos
+            // Diff in pager
+            KeyCode::Char('d')
+                if matches!(self.screen, Screen::PrDetail | Screen::CommitDetail) =>
+            {
+                Action::ViewDiff
+            }
+
+            // Refresh
+            KeyCode::Char('r') => Action::Refresh,
+
+            // Open in browser / Yank URL
+            KeyCode::Char('o') => Action::OpenInBrowser,
+            KeyCode::Char('y') => Action::YankUrl,
+
+            // PR mutations (PrDetail only)
+            KeyCode::Char('m') if self.screen == Screen::PrDetail => Action::ShowMergeMethodSelect,
+            KeyCode::Char('x')
+                if matches!(self.screen, Screen::PrDetail)
+                    || (self.screen == Screen::RepoView && self.repo_tab == RepoTab::Issues) =>
+            {
+                // Close PR or issue
+                match self.screen {
+                    Screen::PrDetail => {
+                        if let Some(pr) = &self.current_pr {
+                            Action::ShowConfirm(ConfirmAction::ClosePr(pr.number))
+                        } else {
+                            Action::None
+                        }
+                    }
+                    Screen::RepoView => {
+                        if let Some(issue) = self.issues.get(self.issue_index) {
+                            Action::ShowConfirm(ConfirmAction::CloseIssue(issue.number))
+                        } else {
+                            Action::None
+                        }
+                    }
+                    _ => Action::None,
+                }
+            }
+            KeyCode::Char('C')
+                if matches!(self.screen, Screen::PrDetail)
+                    || (self.screen == Screen::RepoView && self.repo_tab == RepoTab::Issues) =>
+            {
+                if let Some((owner, repo)) = &self.current_repo {
+                    match self.screen {
+                        Screen::PrDetail => {
+                            if let Some(pr) = &self.current_pr {
+                                Action::SuspendForEditor(EditorContext::CommentOnPr {
+                                    owner: owner.clone(),
+                                    repo: repo.clone(),
+                                    number: pr.number,
+                                })
+                            } else {
+                                Action::None
+                            }
+                        }
+                        Screen::RepoView => {
+                            if let Some(issue) = self.issues.get(self.issue_index) {
+                                Action::SuspendForEditor(EditorContext::CommentOnIssue {
+                                    owner: owner.clone(),
+                                    repo: repo.clone(),
+                                    number: issue.number,
+                                })
+                            } else {
+                                Action::None
+                            }
+                        }
+                        _ => Action::None,
+                    }
                 } else {
                     Action::None
                 }
             }
+            KeyCode::Char('R') if self.screen == Screen::PrDetail => Action::ShowReviewSelect,
+
             // Repo view tab shortcuts
-            KeyCode::Char('p') => {
-                if self.screen == Screen::RepoView {
-                    Action::SwitchRepoTab(RepoTab::PullRequests)
-                } else {
-                    Action::None
-                }
+            KeyCode::Char('p') if self.screen == Screen::RepoView => {
+                Action::SwitchRepoTab(RepoTab::PullRequests)
             }
-            KeyCode::Char('i') => {
-                if self.screen == Screen::RepoView {
-                    Action::SwitchRepoTab(RepoTab::Issues)
-                } else {
-                    Action::None
-                }
+            KeyCode::Char('i') if self.screen == Screen::RepoView => {
+                Action::SwitchRepoTab(RepoTab::Issues)
             }
-            KeyCode::Char('c') => {
-                if self.screen == Screen::RepoView {
-                    Action::SwitchRepoTab(RepoTab::Commits)
-                } else {
-                    Action::None
-                }
+            KeyCode::Char('c') if self.screen == Screen::RepoView => {
+                Action::SwitchRepoTab(RepoTab::Commits)
             }
-            KeyCode::Char('a') => {
-                if self.screen == Screen::RepoView {
-                    Action::SwitchRepoTab(RepoTab::Actions)
-                } else {
-                    Action::None
-                }
+            KeyCode::Char('a') if self.screen == Screen::RepoView => {
+                Action::SwitchRepoTab(RepoTab::Actions)
             }
             _ => Action::None,
         }
     }
 
     pub fn update(&mut self, action: Action) {
-        if self.error.is_some() {
-            if !matches!(action, Action::Quit | Action::Back) {
-                self.error = None;
-            }
+        if self.error.is_some() && !matches!(action, Action::Quit | Action::Back) {
+            self.error = None;
         }
 
         match action {
@@ -483,19 +616,30 @@ impl App {
                         RepoTab::Actions => RepoTab::PullRequests,
                     };
                     self.repo_tab = next;
+                    match next {
+                        RepoTab::PullRequests => self.pr_index = 0,
+                        RepoTab::Issues => self.issue_index = 0,
+                        RepoTab::Commits => self.commit_index = 0,
+                        RepoTab::Actions => self.action_index = 0,
+                    }
+                    self.load_id += 1;
                     if let Some((owner, repo)) = &self.current_repo {
                         self.loading = true;
                         match next {
                             RepoTab::PullRequests => {
-                                self.spawn_load_prs(owner.clone(), repo.clone())
+                                self.spawn_load_prs(owner.clone(), repo.clone(), self.load_id)
                             }
-                            RepoTab::Issues => self.spawn_load_issues(owner.clone(), repo.clone()),
+                            RepoTab::Issues => {
+                                self.spawn_load_issues(owner.clone(), repo.clone(), self.load_id)
+                            }
                             RepoTab::Commits => {
-                                self.spawn_load_commits(owner.clone(), repo.clone())
+                                self.spawn_load_commits(owner.clone(), repo.clone(), self.load_id)
                             }
-                            RepoTab::Actions => {
-                                self.spawn_load_action_runs(owner.clone(), repo.clone())
-                            }
+                            RepoTab::Actions => self.spawn_load_action_runs(
+                                owner.clone(),
+                                repo.clone(),
+                                self.load_id,
+                            ),
                         }
                     }
                 }
@@ -516,19 +660,30 @@ impl App {
                         RepoTab::Actions => RepoTab::Commits,
                     };
                     self.repo_tab = prev;
+                    match prev {
+                        RepoTab::PullRequests => self.pr_index = 0,
+                        RepoTab::Issues => self.issue_index = 0,
+                        RepoTab::Commits => self.commit_index = 0,
+                        RepoTab::Actions => self.action_index = 0,
+                    }
+                    self.load_id += 1;
                     if let Some((owner, repo)) = &self.current_repo {
                         self.loading = true;
                         match prev {
                             RepoTab::PullRequests => {
-                                self.spawn_load_prs(owner.clone(), repo.clone())
+                                self.spawn_load_prs(owner.clone(), repo.clone(), self.load_id)
                             }
-                            RepoTab::Issues => self.spawn_load_issues(owner.clone(), repo.clone()),
+                            RepoTab::Issues => {
+                                self.spawn_load_issues(owner.clone(), repo.clone(), self.load_id)
+                            }
                             RepoTab::Commits => {
-                                self.spawn_load_commits(owner.clone(), repo.clone())
+                                self.spawn_load_commits(owner.clone(), repo.clone(), self.load_id)
                             }
-                            RepoTab::Actions => {
-                                self.spawn_load_action_runs(owner.clone(), repo.clone())
-                            }
+                            RepoTab::Actions => self.spawn_load_action_runs(
+                                owner.clone(),
+                                repo.clone(),
+                                self.load_id,
+                            ),
                         }
                     }
                 }
@@ -545,7 +700,8 @@ impl App {
                                 let repo = req.repo_name.clone();
                                 let number = req.pr_number;
                                 self.current_repo = Some((owner.clone(), repo.clone()));
-                                self.spawn_load_pr_detail(owner, repo, number);
+                                self.load_id += 1;
+                                self.spawn_load_pr_detail(owner, repo, number, self.load_id);
                             }
                         }
                         HomeSection::MyPrs => {
@@ -554,7 +710,8 @@ impl App {
                                 let repo = pr.repo_name.clone();
                                 let number = pr.number;
                                 self.current_repo = Some((owner.clone(), repo.clone()));
-                                self.spawn_load_pr_detail(owner, repo, number);
+                                self.load_id += 1;
+                                self.spawn_load_pr_detail(owner, repo, number, self.load_id);
                             }
                         }
                     }
@@ -566,38 +723,45 @@ impl App {
                         self.current_repo = Some((owner.clone(), name.clone()));
                         self.screen = Screen::RepoView;
                         self.repo_tab = RepoTab::PullRequests;
+                        self.pr_index = 0;
+                        self.issue_index = 0;
+                        self.commit_index = 0;
+                        self.action_index = 0;
+                        self.load_id += 1;
                         // Load PRs for this repo
-                        self.spawn_load_prs(owner, name);
+                        self.spawn_load_prs(owner, name, self.load_id);
                     }
                 }
                 Screen::RepoView => {
                     // In RepoView, Enter drills into the selected item
-                    if let Some((owner, repo)) = &self.current_repo {
-                        match self.repo_tab {
-                            RepoTab::PullRequests => {
-                                if let Some(pr) = self.prs.get(self.pr_index) {
-                                    self.spawn_load_pr_detail(
-                                        owner.clone(),
-                                        repo.clone(),
-                                        pr.number,
-                                    );
+                    match self.repo_tab {
+                        RepoTab::PullRequests => {
+                            if let Some(pr) = self.prs.get(self.pr_index) {
+                                let number = pr.number;
+                                if let Some((owner, repo)) = &self.current_repo {
+                                    let owner = owner.clone();
+                                    let repo = repo.clone();
+                                    self.load_id += 1;
+                                    self.spawn_load_pr_detail(owner, repo, number, self.load_id);
                                 }
                             }
-                            RepoTab::Issues => {
-                                // TODO: Issue detail view
-                            }
-                            RepoTab::Commits => {
-                                if let Some(commit) = self.commits.get(self.commit_index) {
-                                    self.spawn_load_commit_detail(
-                                        owner.clone(),
-                                        repo.clone(),
-                                        commit.sha.clone(),
-                                    );
+                        }
+                        RepoTab::Issues => {
+                            // TODO: Issue detail view
+                        }
+                        RepoTab::Commits => {
+                            if let Some(commit) = self.commits.get(self.commit_index) {
+                                let sha = commit.sha.clone();
+                                if let Some((owner, repo)) = &self.current_repo {
+                                    let owner = owner.clone();
+                                    let repo = repo.clone();
+                                    self.load_id += 1;
+                                    self.spawn_load_commit_detail(owner, repo, sha, self.load_id);
                                 }
                             }
-                            RepoTab::Actions => {
-                                // TODO: Action run detail view
-                            }
+                        }
+                        RepoTab::Actions => {
+                            // TODO: Action run detail view
                         }
                     }
                 }
@@ -607,95 +771,444 @@ impl App {
             // Home screen actions
             Action::LoadHome => {
                 self.loading = true;
-                self.spawn_load_home();
+                self.load_id += 1;
+                self.spawn_load_home(self.load_id);
             }
             Action::HomeLoaded {
                 review_requests,
                 my_prs,
+                load_id,
             } => {
-                self.loading = false;
-                self.review_requests = review_requests;
-                self.my_prs = my_prs;
-                self.review_index = 0;
-                self.my_pr_index = 0;
-                self.screen = Screen::Home;
+                if load_id == self.load_id {
+                    self.loading = false;
+                    self.review_requests = review_requests;
+                    self.my_prs = my_prs;
+                    self.review_index = self
+                        .review_index
+                        .min(self.review_requests.len().saturating_sub(1));
+                    self.my_pr_index = self.my_pr_index.min(self.my_prs.len().saturating_sub(1));
+                }
             }
             // Navigation actions
             Action::SwitchRepoTab(tab) => {
                 self.repo_tab = tab;
+                // Reset index for the new tab
+                match tab {
+                    RepoTab::PullRequests => self.pr_index = 0,
+                    RepoTab::Issues => self.issue_index = 0,
+                    RepoTab::Commits => self.commit_index = 0,
+                    RepoTab::Actions => self.action_index = 0,
+                }
                 // Load content for the new tab if needed
+                self.load_id += 1;
                 if let Some((owner, repo)) = &self.current_repo {
                     self.loading = true;
                     match tab {
                         RepoTab::PullRequests => {
-                            self.spawn_load_prs(owner.clone(), repo.clone());
+                            self.spawn_load_prs(owner.clone(), repo.clone(), self.load_id);
                         }
                         RepoTab::Issues => {
-                            self.spawn_load_issues(owner.clone(), repo.clone());
+                            self.spawn_load_issues(owner.clone(), repo.clone(), self.load_id);
                         }
                         RepoTab::Commits => {
-                            self.spawn_load_commits(owner.clone(), repo.clone());
+                            self.spawn_load_commits(owner.clone(), repo.clone(), self.load_id);
                         }
                         RepoTab::Actions => {
-                            self.spawn_load_action_runs(owner.clone(), repo.clone());
+                            self.spawn_load_action_runs(owner.clone(), repo.clone(), self.load_id);
                         }
                     }
                 }
             }
 
             // Repo list
-            Action::LoadRepos => {
-                self.loading = true;
-                self.spawn_load_repos();
-                self.screen = Screen::RepoList;
-            }
-            Action::ReposLoaded(repos) => {
-                self.loading = false;
-                self.repos = repos;
-                self.repo_index = 0;
+            Action::ReposLoaded(repos, load_id) => {
+                if load_id == self.load_id {
+                    self.loading = false;
+                    self.repos = repos;
+                    self.repo_index = self.repo_index.min(self.repos.len().saturating_sub(1));
+                }
             }
 
             // PR operations
-            Action::PrsLoaded(prs) => {
-                self.loading = false;
-                self.prs = prs;
-                self.pr_index = 0;
+            Action::PrsLoaded(prs, load_id) => {
+                if load_id == self.load_id {
+                    self.loading = false;
+                    self.prs = prs;
+                    self.pr_index = self.pr_index.min(self.prs.len().saturating_sub(1));
+                }
             }
-            Action::PrDetailLoaded(pr) => {
-                self.loading = false;
-                self.prev_screen = Some(self.screen);
-                self.current_pr = Some(*pr);
-                self.scroll_offset = 0;
-                self.screen = Screen::PrDetail;
+            Action::PrDetailLoaded(pr, load_id) => {
+                if load_id == self.load_id {
+                    self.loading = false;
+                    self.current_pr = Some(*pr);
+                    // Only transition screen on first load, not background refresh
+                    if self.screen != Screen::PrDetail {
+                        self.prev_screen = Some(self.screen);
+                        self.scroll_offset = 0;
+                        self.screen = Screen::PrDetail;
+                    }
+                }
             }
 
             // Issues
-            Action::IssuesLoaded(issues) => {
-                self.loading = false;
-                self.issues = issues;
-                self.issue_index = 0;
+            Action::IssuesLoaded(issues, load_id) => {
+                if load_id == self.load_id {
+                    self.loading = false;
+                    self.issues = issues;
+                    self.issue_index = self.issue_index.min(self.issues.len().saturating_sub(1));
+                }
             }
 
             // Commits
-            Action::CommitsLoaded(commits) => {
-                self.loading = false;
-                self.commits = commits;
-                self.commit_index = 0;
+            Action::CommitsLoaded(commits, load_id) => {
+                if load_id == self.load_id {
+                    self.loading = false;
+                    self.commits = commits;
+                    self.commit_index = self.commit_index.min(self.commits.len().saturating_sub(1));
+                }
             }
-            Action::CommitDetailLoaded(commit) => {
-                self.loading = false;
-                self.prev_screen = Some(self.screen);
-                self.current_commit = Some(*commit);
-                self.scroll_offset = 0;
-                self.screen = Screen::CommitDetail;
+            Action::CommitDetailLoaded(commit, load_id) => {
+                if load_id == self.load_id {
+                    self.loading = false;
+                    self.current_commit = Some(*commit);
+                    // Only transition screen on first load, not background refresh
+                    if self.screen != Screen::CommitDetail {
+                        self.prev_screen = Some(self.screen);
+                        self.scroll_offset = 0;
+                        self.screen = Screen::CommitDetail;
+                    }
+                }
             }
 
             // Actions (workflow runs)
-            Action::ActionRunsLoaded(runs) => {
-                self.loading = false;
-                self.action_runs = runs;
-                self.action_index = 0;
+            Action::ActionRunsLoaded(runs, load_id) => {
+                if load_id == self.load_id {
+                    self.loading = false;
+                    self.action_runs = runs;
+                    self.action_index = self
+                        .action_index
+                        .min(self.action_runs.len().saturating_sub(1));
+                }
             }
+
+            // Search actions
+            Action::EnterSearchMode => {
+                self.input_mode = InputMode::Search;
+                self.search.query.clear();
+                self.search.match_indices.clear();
+                self.search.content_matches.clear();
+                self.search.current_match = 0;
+            }
+            Action::ExitSearchMode => {
+                self.input_mode = InputMode::Normal;
+                // Don't clear results - keep them active for n/N navigation
+                if !self.search.query.is_empty() {
+                    self.search.active = true;
+                }
+            }
+            Action::SearchInput(c) => {
+                self.search.query.push(c);
+                self.recompute_search_matches();
+            }
+            Action::SearchBackspace => {
+                self.search.query.pop();
+                if self.search.query.is_empty() {
+                    self.search.match_indices.clear();
+                    self.search.content_matches.clear();
+                    self.search.active = false;
+                } else {
+                    self.recompute_search_matches();
+                }
+            }
+            Action::SearchConfirm => {
+                self.input_mode = InputMode::Normal;
+                if !self.search.query.is_empty() {
+                    self.search.active = true;
+                    self.jump_to_current_match();
+                }
+            }
+            Action::SearchNext => {
+                if !self.search.match_indices.is_empty() {
+                    self.search.current_match =
+                        (self.search.current_match + 1) % self.search.match_indices.len();
+                    self.jump_to_current_match();
+                } else if !self.search.content_matches.is_empty() {
+                    self.search.current_match =
+                        (self.search.current_match + 1) % self.search.content_matches.len();
+                    self.jump_to_content_match();
+                }
+            }
+            Action::SearchPrev => {
+                if !self.search.match_indices.is_empty() {
+                    self.search.current_match = if self.search.current_match == 0 {
+                        self.search.match_indices.len() - 1
+                    } else {
+                        self.search.current_match - 1
+                    };
+                    self.jump_to_current_match();
+                } else if !self.search.content_matches.is_empty() {
+                    self.search.current_match = if self.search.current_match == 0 {
+                        self.search.content_matches.len() - 1
+                    } else {
+                        self.search.current_match - 1
+                    };
+                    self.jump_to_content_match();
+                }
+            }
+            Action::ClearSearch => {
+                self.search = SearchState::default();
+            }
+
+            // Pager
+            Action::ViewDiff => {
+                if let Some((owner, repo)) = &self.current_repo {
+                    match self.screen {
+                        Screen::PrDetail => {
+                            if let Some(pr) = &self.current_pr {
+                                let number = pr.number;
+                                self.spawn_load_pr_diff(owner.clone(), repo.clone(), number);
+                            }
+                        }
+                        Screen::CommitDetail => {
+                            if let Some(commit) = &self.current_commit {
+                                let mut diff = String::new();
+                                for file in &commit.files {
+                                    if let Some(patch) = &file.patch {
+                                        diff.push_str(&format!(
+                                            "diff --git a/{f} b/{f}\n",
+                                            f = file.filename
+                                        ));
+                                        diff.push_str(patch);
+                                        diff.push('\n');
+                                    }
+                                }
+                                let _ = self.action_tx.send(Action::SuspendForPager(diff));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Action::SuspendForPager(_) => {
+                // Handled in main loop
+            }
+
+            // Refresh
+            Action::Refresh => {
+                self.load_id += 1;
+                match self.screen {
+                    Screen::Home => {
+                        // On Home, r navigates to repo browser
+                        self.loading = true;
+                        self.spawn_load_repos(self.load_id);
+                        self.screen = Screen::RepoList;
+                    }
+                    Screen::RepoList => {
+                        self.loading = true;
+                        self.spawn_load_repos(self.load_id);
+                    }
+                    Screen::RepoView => {
+                        if let Some((owner, repo)) = &self.current_repo {
+                            self.loading = true;
+                            match self.repo_tab {
+                                RepoTab::PullRequests => {
+                                    self.spawn_load_prs(owner.clone(), repo.clone(), self.load_id)
+                                }
+                                RepoTab::Issues => self.spawn_load_issues(
+                                    owner.clone(),
+                                    repo.clone(),
+                                    self.load_id,
+                                ),
+                                RepoTab::Commits => self.spawn_load_commits(
+                                    owner.clone(),
+                                    repo.clone(),
+                                    self.load_id,
+                                ),
+                                RepoTab::Actions => self.spawn_load_action_runs(
+                                    owner.clone(),
+                                    repo.clone(),
+                                    self.load_id,
+                                ),
+                            }
+                        }
+                    }
+                    Screen::PrDetail => {
+                        if let Some((owner, repo)) = &self.current_repo {
+                            if let Some(pr) = &self.current_pr {
+                                self.spawn_load_pr_detail(
+                                    owner.clone(),
+                                    repo.clone(),
+                                    pr.number,
+                                    self.load_id,
+                                );
+                            }
+                        }
+                    }
+                    Screen::CommitDetail => {
+                        if let Some((owner, repo)) = &self.current_repo {
+                            if let Some(commit) = &self.current_commit {
+                                self.spawn_load_commit_detail(
+                                    owner.clone(),
+                                    repo.clone(),
+                                    commit.sha.clone(),
+                                    self.load_id,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Open in browser
+            Action::OpenInBrowser => {
+                if let Some(url) = self.current_item_url() {
+                    let _ = open::that(&url);
+                }
+            }
+
+            // Yank URL
+            Action::YankUrl => {
+                if let Some(url) = self.current_item_url() {
+                    if let Ok(mut clipboard) = arboard::Clipboard::new() {
+                        if clipboard.set_text(&url).is_ok() {
+                            self.flash_message =
+                                Some(("URL copied!".to_string(), std::time::Instant::now()));
+                        }
+                    }
+                }
+            }
+
+            // Popup: merge method select
+            Action::ShowMergeMethodSelect => {
+                self.input_mode = InputMode::SelectPopup;
+                self.popup_title = "Merge Method".to_string();
+                self.popup_items = vec![
+                    "Merge commit".to_string(),
+                    "Squash and merge".to_string(),
+                    "Rebase and merge".to_string(),
+                ];
+                self.popup_index = 0;
+            }
+
+            // Popup: review select
+            Action::ShowReviewSelect => {
+                self.input_mode = InputMode::SelectPopup;
+                self.popup_title = "Submit Review".to_string();
+                self.popup_items = vec![
+                    "Approve".to_string(),
+                    "Request changes".to_string(),
+                    "Comment".to_string(),
+                ];
+                self.popup_index = 0;
+            }
+
+            // Confirm dialog
+            Action::ShowConfirm(confirm_action) => {
+                self.confirm_action = Some(confirm_action);
+                self.input_mode = InputMode::Confirm;
+            }
+
+            Action::ConfirmYes => {
+                if let Some(confirm) = self.confirm_action.take() {
+                    self.input_mode = InputMode::Normal;
+                    match confirm {
+                        ConfirmAction::ClosePr(number) => {
+                            if let Some((owner, repo)) = &self.current_repo {
+                                self.spawn_close_pr(owner.clone(), repo.clone(), number);
+                            }
+                        }
+                        ConfirmAction::MergePr { number, method } => {
+                            if let Some((owner, repo)) = &self.current_repo {
+                                self.spawn_merge_pr(owner.clone(), repo.clone(), number, method);
+                            }
+                        }
+                        ConfirmAction::CloseIssue(number) => {
+                            if let Some((owner, repo)) = &self.current_repo {
+                                self.spawn_close_issue(owner.clone(), repo.clone(), number);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Action::ConfirmNo => {
+                self.confirm_action = None;
+                self.input_mode = InputMode::Normal;
+            }
+
+            // Popup navigation
+            Action::PopupUp => {
+                if self.popup_index > 0 {
+                    self.popup_index -= 1;
+                }
+            }
+            Action::PopupDown => {
+                if self.popup_index < self.popup_items.len().saturating_sub(1) {
+                    self.popup_index += 1;
+                }
+            }
+            Action::PopupSelect => {
+                self.input_mode = InputMode::Normal;
+                // Determine what the popup was for based on title
+                if self.popup_title == "Merge Method" {
+                    if let Some(pr) = &self.current_pr {
+                        let method = match self.popup_index {
+                            0 => crate::types::MergeMethod::Merge,
+                            1 => crate::types::MergeMethod::Squash,
+                            _ => crate::types::MergeMethod::Rebase,
+                        };
+                        let _ = self
+                            .action_tx
+                            .send(Action::ShowConfirm(ConfirmAction::MergePr {
+                                number: pr.number,
+                                method,
+                            }));
+                    }
+                } else if self.popup_title == "Submit Review" {
+                    let event = match self.popup_index {
+                        0 => crate::types::ReviewEvent::Approve,
+                        1 => crate::types::ReviewEvent::RequestChanges,
+                        _ => crate::types::ReviewEvent::Comment,
+                    };
+                    if let Some((owner, repo)) = &self.current_repo {
+                        if let Some(pr) = &self.current_pr {
+                            let _ = self.action_tx.send(Action::SuspendForEditor(
+                                EditorContext::ReviewPr {
+                                    owner: owner.clone(),
+                                    repo: repo.clone(),
+                                    number: pr.number,
+                                    event,
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Mutation results
+            Action::PrMerged => {
+                self.flash_message = Some(("PR merged!".to_string(), std::time::Instant::now()));
+                let _ = self.action_tx.send(Action::Back);
+            }
+            Action::PrClosed => {
+                self.flash_message = Some(("PR closed.".to_string(), std::time::Instant::now()));
+                let _ = self.action_tx.send(Action::Back);
+            }
+            Action::IssueClosed => {
+                self.flash_message = Some(("Issue closed.".to_string(), std::time::Instant::now()));
+                let _ = self.action_tx.send(Action::Refresh);
+            }
+            Action::CommentPosted => {
+                self.flash_message =
+                    Some(("Comment posted.".to_string(), std::time::Instant::now()));
+            }
+            Action::ReviewSubmitted => {
+                self.flash_message =
+                    Some(("Review submitted.".to_string(), std::time::Instant::now()));
+            }
+
+            // Editor suspend - handled in main loop
+            Action::SuspendForEditor(_) => {}
 
             Action::Error(msg) => {
                 self.loading = false;
@@ -703,13 +1216,227 @@ impl App {
             }
             Action::None => {}
         }
+
+        // Clear flash messages after 3 seconds
+        if let Some((_, instant)) = &self.flash_message {
+            if instant.elapsed() > std::time::Duration::from_secs(3) {
+                self.flash_message = None;
+            }
+        }
     }
 
-    fn spawn_load_home(&self) {
+    fn recompute_search_matches(&mut self) {
+        let query = self.search.query.to_lowercase();
+        if query.is_empty() {
+            self.search.match_indices.clear();
+            self.search.content_matches.clear();
+            return;
+        }
+
+        match self.screen {
+            Screen::Home => match self.home_section {
+                HomeSection::ReviewRequests => {
+                    self.search.match_indices = self
+                        .review_requests
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| {
+                            r.pr_title.to_lowercase().contains(&query)
+                                || r.repo_name.to_lowercase().contains(&query)
+                                || r.author.to_lowercase().contains(&query)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+                HomeSection::MyPrs => {
+                    self.search.match_indices = self
+                        .my_prs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| {
+                            p.title.to_lowercase().contains(&query)
+                                || p.repo_name.to_lowercase().contains(&query)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+            },
+            Screen::RepoList => {
+                self.search.match_indices = self
+                    .repos
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| {
+                        r.name.to_lowercase().contains(&query)
+                            || r.owner.to_lowercase().contains(&query)
+                            || r.description
+                                .as_deref()
+                                .unwrap_or("")
+                                .to_lowercase()
+                                .contains(&query)
+                    })
+                    .map(|(i, _)| i)
+                    .collect();
+            }
+            Screen::RepoView => match self.repo_tab {
+                RepoTab::PullRequests => {
+                    self.search.match_indices = self
+                        .prs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, p)| {
+                            p.title.to_lowercase().contains(&query)
+                                || p.author.to_lowercase().contains(&query)
+                                || p.number.to_string().contains(&query)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+                RepoTab::Issues => {
+                    self.search.match_indices = self
+                        .issues
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, issue)| {
+                            issue.title.to_lowercase().contains(&query)
+                                || issue.author.to_lowercase().contains(&query)
+                                || issue.number.to_string().contains(&query)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+                RepoTab::Commits => {
+                    self.search.match_indices = self
+                        .commits
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| {
+                            c.message.to_lowercase().contains(&query)
+                                || c.author.to_lowercase().contains(&query)
+                                || c.sha.to_lowercase().contains(&query)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+                RepoTab::Actions => {
+                    self.search.match_indices = self
+                        .action_runs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| {
+                            r.name.to_lowercase().contains(&query)
+                                || r.branch.to_lowercase().contains(&query)
+                        })
+                        .map(|(i, _)| i)
+                        .collect();
+                }
+            },
+            Screen::PrDetail => {
+                self.search.content_matches.clear();
+                if let Some(pr) = &self.current_pr {
+                    let body = pr.body.as_deref().unwrap_or("");
+                    for (line_idx, line) in body.lines().enumerate() {
+                        let lower = line.to_lowercase();
+                        let mut start = 0;
+                        while let Some(pos) = lower[start..].find(&query) {
+                            let byte_start = start + pos;
+                            let byte_end = byte_start + query.len();
+                            self.search
+                                .content_matches
+                                .push((line_idx, byte_start, byte_end));
+                            start = byte_end;
+                        }
+                    }
+                }
+            }
+            Screen::CommitDetail => {
+                self.search.content_matches.clear();
+                if let Some(commit) = &self.current_commit {
+                    let mut line_idx = 0;
+                    // Skip header lines (same structure as render)
+                    line_idx += 5; // header, blank, stats, blank, "Message:"
+                    for msg_line in commit.message.lines() {
+                        let lower = msg_line.to_lowercase();
+                        let mut start = 0;
+                        while let Some(pos) = lower[start..].find(&query) {
+                            let byte_start = start + pos;
+                            let byte_end = byte_start + query.len();
+                            self.search
+                                .content_matches
+                                .push((line_idx, byte_start, byte_end));
+                            start = byte_end;
+                        }
+                        line_idx += 1;
+                    }
+                    line_idx += 1; // blank after message
+                    for file in &commit.files {
+                        line_idx += 1; // file header
+                        if let Some(patch) = &file.patch {
+                            for patch_line in patch.lines() {
+                                let lower = patch_line.to_lowercase();
+                                let mut start = 0;
+                                while let Some(pos) = lower[start..].find(&query) {
+                                    let byte_start = start + pos;
+                                    let byte_end = byte_start + query.len();
+                                    self.search
+                                        .content_matches
+                                        .push((line_idx, byte_start, byte_end));
+                                    start = byte_end;
+                                }
+                                line_idx += 1;
+                            }
+                        }
+                        line_idx += 1; // blank after file
+                    }
+                }
+            }
+        }
+
+        self.search.current_match = 0;
+    }
+
+    fn jump_to_current_match(&mut self) {
+        if let Some(&idx) = self.search.match_indices.get(self.search.current_match) {
+            match self.screen {
+                Screen::Home => match self.home_section {
+                    HomeSection::ReviewRequests => self.review_index = idx,
+                    HomeSection::MyPrs => self.my_pr_index = idx,
+                },
+                Screen::RepoList => self.repo_index = idx,
+                Screen::RepoView => match self.repo_tab {
+                    RepoTab::PullRequests => self.pr_index = idx,
+                    RepoTab::Issues => self.issue_index = idx,
+                    RepoTab::Commits => self.commit_index = idx,
+                    RepoTab::Actions => self.action_index = idx,
+                },
+                _ => {}
+            }
+        }
+    }
+
+    fn jump_to_content_match(&mut self) {
+        if let Some(&(line_idx, _, _)) = self.search.content_matches.get(self.search.current_match)
+        {
+            self.scroll_offset = line_idx.saturating_sub(5);
+        }
+    }
+
+    fn spawn_load_home(&self, load_id: u64) {
         let tx = self.action_tx.clone();
         let github = Arc::clone(&self.github);
+
+        // Serve from cache immediately
+        if let Some(cached) = cache::read::<HomeData>("home") {
+            tx.send(Action::HomeLoaded {
+                review_requests: cached.review_requests,
+                my_prs: cached.my_prs,
+                load_id,
+            })
+            .ok();
+        }
+
+        // Background refresh
         tokio::spawn(async move {
-            // First get the current user
             let username = match github.get_current_user().await {
                 Ok(u) => u,
                 Err(e) => {
@@ -718,7 +1445,6 @@ impl App {
                 }
             };
 
-            // Fetch review requests and my PRs in parallel
             let (review_result, my_prs_result) = tokio::join!(
                 github.list_review_requests(&username),
                 github.list_my_prs(&username)
@@ -726,9 +1452,17 @@ impl App {
 
             match (review_result, my_prs_result) {
                 (Ok(review_requests), Ok(my_prs)) => {
+                    cache::write(
+                        "home",
+                        &HomeData {
+                            review_requests: review_requests.clone(),
+                            my_prs: my_prs.clone(),
+                        },
+                    );
                     tx.send(Action::HomeLoaded {
                         review_requests,
                         my_prs,
+                        load_id,
                     })
                     .ok();
                 }
@@ -739,13 +1473,19 @@ impl App {
         });
     }
 
-    fn spawn_load_repos(&self) {
+    fn spawn_load_repos(&self, load_id: u64) {
         let tx = self.action_tx.clone();
         let github = Arc::clone(&self.github);
+
+        if let Some(cached) = cache::read::<Vec<Repository>>("repos") {
+            tx.send(Action::ReposLoaded(cached, load_id)).ok();
+        }
+
         tokio::spawn(async move {
             match github.list_repos().await {
                 Ok(repos) => {
-                    tx.send(Action::ReposLoaded(repos)).ok();
+                    cache::write("repos", &repos);
+                    tx.send(Action::ReposLoaded(repos, load_id)).ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -754,13 +1494,20 @@ impl App {
         });
     }
 
-    fn spawn_load_prs(&self, owner: String, repo: String) {
+    fn spawn_load_prs(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let github = Arc::clone(&self.github);
+        let key = format!("prs_{}", cache::repo_key(&owner, &repo));
+
+        if let Some(cached) = cache::read::<Vec<PrSummary>>(&key) {
+            tx.send(Action::PrsLoaded(cached, load_id)).ok();
+        }
+
         tokio::spawn(async move {
             match github.list_prs(&owner, &repo).await {
                 Ok(prs) => {
-                    tx.send(Action::PrsLoaded(prs)).ok();
+                    cache::write(&key, &prs);
+                    tx.send(Action::PrsLoaded(prs, load_id)).ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -769,13 +1516,21 @@ impl App {
         });
     }
 
-    fn spawn_load_pr_detail(&self, owner: String, repo: String, number: u64) {
+    fn spawn_load_pr_detail(&self, owner: String, repo: String, number: u64, load_id: u64) {
         let tx = self.action_tx.clone();
         let github = Arc::clone(&self.github);
+        let key = format!("pr_{}_{}", cache::repo_key(&owner, &repo), number);
+
+        if let Some(cached) = cache::read::<PullRequest>(&key) {
+            tx.send(Action::PrDetailLoaded(Box::new(cached), load_id))
+                .ok();
+        }
+
         tokio::spawn(async move {
             match github.get_pr(&owner, &repo, number).await {
                 Ok(pr) => {
-                    tx.send(Action::PrDetailLoaded(Box::new(pr))).ok();
+                    cache::write(&key, &pr);
+                    tx.send(Action::PrDetailLoaded(Box::new(pr), load_id)).ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -784,13 +1539,20 @@ impl App {
         });
     }
 
-    fn spawn_load_issues(&self, owner: String, repo: String) {
+    fn spawn_load_issues(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let github = Arc::clone(&self.github);
+        let key = format!("issues_{}", cache::repo_key(&owner, &repo));
+
+        if let Some(cached) = cache::read::<Vec<Issue>>(&key) {
+            tx.send(Action::IssuesLoaded(cached, load_id)).ok();
+        }
+
         tokio::spawn(async move {
             match github.list_issues(&owner, &repo).await {
                 Ok(issues) => {
-                    tx.send(Action::IssuesLoaded(issues)).ok();
+                    cache::write(&key, &issues);
+                    tx.send(Action::IssuesLoaded(issues, load_id)).ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -799,13 +1561,20 @@ impl App {
         });
     }
 
-    fn spawn_load_commits(&self, owner: String, repo: String) {
+    fn spawn_load_commits(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let github = Arc::clone(&self.github);
+        let key = format!("commits_{}", cache::repo_key(&owner, &repo));
+
+        if let Some(cached) = cache::read::<Vec<Commit>>(&key) {
+            tx.send(Action::CommitsLoaded(cached, load_id)).ok();
+        }
+
         tokio::spawn(async move {
             match github.list_commits(&owner, &repo).await {
                 Ok(commits) => {
-                    tx.send(Action::CommitsLoaded(commits)).ok();
+                    cache::write(&key, &commits);
+                    tx.send(Action::CommitsLoaded(commits, load_id)).ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -814,13 +1583,20 @@ impl App {
         });
     }
 
-    fn spawn_load_action_runs(&self, owner: String, repo: String) {
+    fn spawn_load_action_runs(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let github = Arc::clone(&self.github);
+        let key = format!("actions_{}", cache::repo_key(&owner, &repo));
+
+        if let Some(cached) = cache::read::<Vec<ActionRun>>(&key) {
+            tx.send(Action::ActionRunsLoaded(cached, load_id)).ok();
+        }
+
         tokio::spawn(async move {
             match github.list_action_runs(&owner, &repo).await {
                 Ok(runs) => {
-                    tx.send(Action::ActionRunsLoaded(runs)).ok();
+                    cache::write(&key, &runs);
+                    tx.send(Action::ActionRunsLoaded(runs, load_id)).ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -866,18 +1642,215 @@ impl App {
         }
     }
 
-    fn spawn_load_commit_detail(&self, owner: String, repo: String, sha: String) {
+    fn spawn_load_commit_detail(&self, owner: String, repo: String, sha: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let github = Arc::clone(&self.github);
+        let key = format!(
+            "commit_{}_{}",
+            cache::repo_key(&owner, &repo),
+            &sha[..7.min(sha.len())]
+        );
+
+        if let Some(cached) = cache::read::<CommitDetail>(&key) {
+            tx.send(Action::CommitDetailLoaded(Box::new(cached), load_id))
+                .ok();
+        }
+
         tokio::spawn(async move {
             match github.get_commit(&owner, &repo, &sha).await {
                 Ok(commit) => {
-                    tx.send(Action::CommitDetailLoaded(Box::new(commit))).ok();
+                    cache::write(&key, &commit);
+                    tx.send(Action::CommitDetailLoaded(Box::new(commit), load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
                 }
             }
         });
+    }
+
+    fn spawn_load_pr_diff(&self, owner: String, repo: String, number: u64) {
+        let tx = self.action_tx.clone();
+        let github = Arc::clone(&self.github);
+        tokio::spawn(async move {
+            match github.get_pr_diff(&owner, &repo, number).await {
+                Ok(diff) => {
+                    tx.send(Action::SuspendForPager(diff)).ok();
+                }
+                Err(e) => {
+                    tx.send(Action::Error(e.to_string())).ok();
+                }
+            }
+        });
+    }
+
+    fn spawn_close_pr(&self, owner: String, repo: String, number: u64) {
+        let tx = self.action_tx.clone();
+        let github = Arc::clone(&self.github);
+        tokio::spawn(async move {
+            match github.close_pr(&owner, &repo, number).await {
+                Ok(()) => {
+                    tx.send(Action::PrClosed).ok();
+                }
+                Err(e) => {
+                    tx.send(Action::Error(e.to_string())).ok();
+                }
+            }
+        });
+    }
+
+    fn spawn_merge_pr(
+        &self,
+        owner: String,
+        repo: String,
+        number: u64,
+        method: crate::types::MergeMethod,
+    ) {
+        let tx = self.action_tx.clone();
+        let github = Arc::clone(&self.github);
+        tokio::spawn(async move {
+            match github
+                .merge_pr(&owner, &repo, number, method.as_api_str())
+                .await
+            {
+                Ok(()) => {
+                    tx.send(Action::PrMerged).ok();
+                }
+                Err(e) => {
+                    tx.send(Action::Error(e.to_string())).ok();
+                }
+            }
+        });
+    }
+
+    fn spawn_close_issue(&self, owner: String, repo: String, number: u64) {
+        let tx = self.action_tx.clone();
+        let github = Arc::clone(&self.github);
+        tokio::spawn(async move {
+            match github.close_issue(&owner, &repo, number).await {
+                Ok(()) => {
+                    tx.send(Action::IssueClosed).ok();
+                }
+                Err(e) => {
+                    tx.send(Action::Error(e.to_string())).ok();
+                }
+            }
+        });
+    }
+
+    pub fn spawn_comment(&self, owner: String, repo: String, number: u64, body: String) {
+        let tx = self.action_tx.clone();
+        let github = Arc::clone(&self.github);
+        tokio::spawn(async move {
+            match github.comment(&owner, &repo, number, &body).await {
+                Ok(()) => {
+                    tx.send(Action::CommentPosted).ok();
+                }
+                Err(e) => {
+                    tx.send(Action::Error(e.to_string())).ok();
+                }
+            }
+        });
+    }
+
+    pub fn spawn_submit_review(
+        &self,
+        owner: String,
+        repo: String,
+        number: u64,
+        event: crate::types::ReviewEvent,
+        body: String,
+    ) {
+        let tx = self.action_tx.clone();
+        let github = Arc::clone(&self.github);
+        tokio::spawn(async move {
+            match github
+                .submit_review(&owner, &repo, number, event.as_api_str(), &body)
+                .await
+            {
+                Ok(()) => {
+                    tx.send(Action::ReviewSubmitted).ok();
+                }
+                Err(e) => {
+                    tx.send(Action::Error(e.to_string())).ok();
+                }
+            }
+        });
+    }
+
+    /// Construct GitHub URL for the current item
+    fn current_item_url(&self) -> Option<String> {
+        match self.screen {
+            Screen::Home => match self.home_section {
+                HomeSection::ReviewRequests => {
+                    let req = self.review_requests.get(self.review_index)?;
+                    Some(format!(
+                        "https://github.com/{}/{}/pull/{}",
+                        req.repo_owner, req.repo_name, req.pr_number
+                    ))
+                }
+                HomeSection::MyPrs => {
+                    let pr = self.my_prs.get(self.my_pr_index)?;
+                    Some(format!(
+                        "https://github.com/{}/{}/pull/{}",
+                        pr.repo_owner, pr.repo_name, pr.number
+                    ))
+                }
+            },
+            Screen::RepoList => {
+                let repo = self.repos.get(self.repo_index)?;
+                Some(format!("https://github.com/{}/{}", repo.owner, repo.name))
+            }
+            Screen::RepoView => {
+                let (owner, repo) = self.current_repo.as_ref()?;
+                match self.repo_tab {
+                    RepoTab::PullRequests => {
+                        let pr = self.prs.get(self.pr_index)?;
+                        Some(format!(
+                            "https://github.com/{}/{}/pull/{}",
+                            owner, repo, pr.number
+                        ))
+                    }
+                    RepoTab::Issues => {
+                        let issue = self.issues.get(self.issue_index)?;
+                        Some(format!(
+                            "https://github.com/{}/{}/issues/{}",
+                            owner, repo, issue.number
+                        ))
+                    }
+                    RepoTab::Commits => {
+                        let commit = self.commits.get(self.commit_index)?;
+                        Some(format!(
+                            "https://github.com/{}/{}/commit/{}",
+                            owner, repo, commit.sha
+                        ))
+                    }
+                    RepoTab::Actions => {
+                        let run = self.action_runs.get(self.action_index)?;
+                        Some(format!(
+                            "https://github.com/{}/{}/actions/runs/{}",
+                            owner, repo, run.id
+                        ))
+                    }
+                }
+            }
+            Screen::PrDetail => {
+                let (owner, repo) = self.current_repo.as_ref()?;
+                let pr = self.current_pr.as_ref()?;
+                Some(format!(
+                    "https://github.com/{}/{}/pull/{}",
+                    owner, repo, pr.number
+                ))
+            }
+            Screen::CommitDetail => {
+                let (owner, repo) = self.current_repo.as_ref()?;
+                let commit = self.current_commit.as_ref()?;
+                Some(format!(
+                    "https://github.com/{}/{}/commit/{}",
+                    owner, repo, commit.sha
+                ))
+            }
+        }
     }
 }

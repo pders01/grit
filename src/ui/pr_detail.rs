@@ -7,6 +7,8 @@ use ratatui::Frame;
 use crate::app::App;
 use crate::types::PrState;
 
+use super::highlight_line;
+
 pub fn render(frame: &mut Frame, app: &App, area: Rect) {
     let Some(pr) = &app.current_pr else {
         let block = Block::default().borders(Borders::ALL).title("Pull Request");
@@ -98,10 +100,14 @@ fn render_header(frame: &mut Frame, pr: &crate::types::PullRequest, area: Rect) 
 fn render_body(frame: &mut Frame, app: &App, pr: &crate::types::PullRequest, area: Rect) {
     let body_text = pr.body.as_deref().unwrap_or("No description provided.");
 
-    // Replace tabs with spaces to avoid rendering issues
+    // Build lines with search highlighting
     let lines: Vec<Line> = body_text
         .lines()
-        .map(|l| Line::from(l.replace('\t', "    ")))
+        .enumerate()
+        .map(|(line_idx, l)| {
+            let text = l.replace('\t', "    ");
+            highlight_line(&text, line_idx, Style::default(), &app.search)
+        })
         .collect();
 
     // Calculate visible area (account for borders)

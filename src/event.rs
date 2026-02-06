@@ -2,7 +2,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Debug, Clone)]
 pub enum Event {
-    Init,
     Tick,
     Render,
     Key(KeyEvent),

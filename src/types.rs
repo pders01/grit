@@ -1,5 +1,67 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeMethod {
+    Merge,
+    Squash,
+    Rebase,
+}
+
+impl MergeMethod {
+    pub fn as_api_str(&self) -> &'static str {
+        match self {
+            MergeMethod::Merge => "merge",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Rebase => "rebase",
+        }
+    }
+}
+
+impl fmt::Display for MergeMethod {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MergeMethod::Merge => write!(f, "Merge commit"),
+            MergeMethod::Squash => write!(f, "Squash and merge"),
+            MergeMethod::Rebase => write!(f, "Rebase and merge"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewEvent {
+    Approve,
+    RequestChanges,
+    Comment,
+}
+
+impl ReviewEvent {
+    pub fn as_api_str(&self) -> &'static str {
+        match self {
+            ReviewEvent::Approve => "APPROVE",
+            ReviewEvent::RequestChanges => "REQUEST_CHANGES",
+            ReviewEvent::Comment => "COMMENT",
+        }
+    }
+}
+
+impl fmt::Display for ReviewEvent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ReviewEvent::Approve => write!(f, "Approve"),
+            ReviewEvent::RequestChanges => write!(f, "Request changes"),
+            ReviewEvent::Comment => write!(f, "Comment"),
+        }
+    }
+}
+
+/// Cached home screen data
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HomeData {
+    pub review_requests: Vec<ReviewRequest>,
+    pub my_prs: Vec<MyPr>,
+}
 
 /// GitHub Issue
 #[derive(Debug, Clone, Serialize, Deserialize)]

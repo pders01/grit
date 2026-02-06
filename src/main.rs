@@ -1,8 +1,11 @@
 mod action;
 mod app;
+mod auth;
+mod cache;
 mod error;
 mod event;
 mod github;
+mod pager;
 mod tui;
 mod types;
 mod ui;
@@ -13,9 +16,8 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::action::Action;
+use crate::action::{Action, EditorContext};
 use crate::app::App;
-use crate::error::GritError;
 use crate::event::Event;
 use crate::github::GitHub;
 use crate::tui::EventHandler;
@@ -35,9 +37,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         original_hook(panic_info);
     }));
 
-    // Get GitHub token from environment
-    let token = std::env::var("GITHUB_TOKEN")
-        .map_err(|_| GritError::Auth("GITHUB_TOKEN environment variable not set".to_string()))?;
+    // Load GitHub token (env → gh CLI → stored → device flow)
+    let token = auth::load_token()
+        .await
+        .map_err(Box::<dyn std::error::Error>::from)?;
 
     // Initialize GitHub client
     let github = GitHub::new(token)?;
@@ -49,6 +52,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tui::restore()?;
 
     result
+}
+
+/// Actions that require suspending the TUI and shelling out
+enum SuspendAction {
+    Pager(String),
+    Editor(EditorContext),
 }
 
 async fn run(github: GitHub) -> Result<(), Box<dyn std::error::Error>> {
@@ -66,9 +75,15 @@ async fn run(github: GitHub) -> Result<(), Box<dyn std::error::Error>> {
     let render_rate = Duration::from_millis(16); // ~60fps
     let mut events = EventHandler::new(tick_rate, render_rate);
 
+    // Trigger initial data load (not from EventHandler to avoid re-triggering after pager suspend)
+    action_tx.send(Action::LoadHome)?;
+
     // Main loop
     loop {
-        // Handle events and actions
+        // Collect any suspend action to handle AFTER the select block,
+        // so we can drop the event handler before shelling out.
+        let mut suspend: Option<SuspendAction> = None;
+
         tokio::select! {
             Some(event) = events.next() => {
                 if event.is_quit() {
@@ -88,8 +103,68 @@ async fn run(github: GitHub) -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             Some(action) = action_rx.recv() => {
-                app.update(action);
+                match action {
+                    Action::SuspendForPager(content) => {
+                        suspend = Some(SuspendAction::Pager(content));
+                    }
+                    Action::SuspendForEditor(ctx) => {
+                        suspend = Some(SuspendAction::Editor(ctx));
+                    }
+                    other => {
+                        app.update(other);
+                    }
+                }
             }
+        }
+
+        // Handle suspend actions outside the select block.
+        // Drop the event handler first so its background task stops
+        // polling crossterm — otherwise it steals keystrokes from the
+        // child pager/editor process.
+        if let Some(action) = suspend {
+            drop(events);
+            tui::restore()?;
+
+            match action {
+                SuspendAction::Pager(content) => {
+                    let pager_cmd = pager::detect_pager();
+                    let _ = pager::open_pager(&content, &pager_cmd);
+                }
+                SuspendAction::Editor(ctx) => {
+                    if let Some(body) = open_editor() {
+                        if !body.trim().is_empty() {
+                            match ctx {
+                                EditorContext::CommentOnPr {
+                                    owner,
+                                    repo,
+                                    number,
+                                }
+                                | EditorContext::CommentOnIssue {
+                                    owner,
+                                    repo,
+                                    number,
+                                } => {
+                                    app.spawn_comment(owner, repo, number, body);
+                                }
+                                EditorContext::ReviewPr {
+                                    owner,
+                                    repo,
+                                    number,
+                                    event,
+                                } => {
+                                    app.spawn_submit_review(owner, repo, number, event, body);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            terminal = tui::init()?;
+            // Discard leftover keystrokes (e.g. extra q's from exiting the pager)
+            tui::drain_events();
+            events = EventHandler::new(tick_rate, render_rate);
+            continue;
         }
 
         if app.should_quit {
@@ -98,4 +173,28 @@ async fn run(github: GitHub) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Open $EDITOR with a temp file, return contents if saved
+fn open_editor() -> Option<String> {
+    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+    let tmp_dir = std::env::temp_dir();
+    let tmp_path = tmp_dir.join(format!("grit-{}.md", std::process::id()));
+
+    // Write empty file
+    std::fs::write(&tmp_path, "").ok()?;
+
+    let status = std::process::Command::new("sh")
+        .args(["-c", &format!("{} {}", editor, tmp_path.display())])
+        .status()
+        .ok()?;
+
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp_path);
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&tmp_path).ok()?;
+    let _ = std::fs::remove_file(&tmp_path);
+    Some(content)
 }

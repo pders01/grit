@@ -10,16 +10,17 @@ use crate::types::{
 
 pub struct GitHub {
     client: Octocrab,
+    token: String,
 }
 
 impl GitHub {
     pub fn new(token: String) -> Result<Self> {
         let client = Octocrab::builder()
-            .personal_token(token)
+            .personal_token(token.clone())
             .build()
             .map_err(|e| GritError::Auth(e.to_string()))?;
 
-        Ok(Self { client })
+        Ok(Self { client, token })
     }
 
     pub async fn list_repos(&self) -> Result<Vec<Repository>> {
@@ -493,5 +494,131 @@ impl GitHub {
         } else {
             Ok(ChecksStatus::Success)
         }
+    }
+
+    /// Fetch raw diff for a pull request
+    pub async fn get_pr_diff(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}",
+            owner, repo, number
+        );
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github.diff")
+            .header("User-Agent", "grit")
+            .send()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(GritError::Api(format!(
+                "Failed to fetch diff: {}",
+                response.status()
+            )));
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))
+    }
+
+    /// Merge a pull request
+    pub async fn merge_pr(&self, owner: &str, repo: &str, number: u64, method: &str) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/merge",
+            owner, repo, number
+        );
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({ "merge_method": method });
+        let response = client
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "grit")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(GritError::Api(format!("Merge failed: {}", text)));
+        }
+        Ok(())
+    }
+
+    /// Close a pull request
+    pub async fn close_pr(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        self.client
+            .pulls(owner, repo)
+            .update(number)
+            .state(octocrab::params::pulls::State::Closed)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    /// Close an issue
+    pub async fn close_issue(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        self.client
+            .issues(owner, repo)
+            .update(number)
+            .state(OctoIssueState::Closed)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    /// Comment on an issue or PR (GitHub treats PR comments as issue comments)
+    pub async fn comment(&self, owner: &str, repo: &str, number: u64, body: &str) -> Result<()> {
+        self.client
+            .issues(owner, repo)
+            .create_comment(number, body)
+            .await?;
+        Ok(())
+    }
+
+    /// Submit a PR review
+    pub async fn submit_review(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        event: &str,
+        body: &str,
+    ) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/reviews",
+            owner, repo, number
+        );
+        let client = reqwest::Client::new();
+        let payload = serde_json::json!({
+            "event": event,
+            "body": body,
+        });
+        let response = client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "grit")
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(GritError::Api(format!("Review failed: {}", text)));
+        }
+        Ok(())
     }
 }

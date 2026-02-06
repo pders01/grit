@@ -6,7 +6,9 @@ mod config;
 mod error;
 mod event;
 mod forge;
+mod gitea;
 mod github;
+mod gitlab;
 mod pager;
 mod tui;
 mod types;
@@ -57,12 +59,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize forge client
     let forge: Arc<dyn Forge> = match forge_config.forge_type {
         ForgeType::GitHub => Arc::new(GitHub::new(token)?),
-        ForgeType::GitLab => {
-            return Err("GitLab support not yet implemented".into());
-        }
-        ForgeType::Gitea => {
-            return Err("Gitea support not yet implemented".into());
-        }
+        ForgeType::GitLab => Arc::new(gitlab::GitLab::new(forge_config.host.clone(), token)),
+        ForgeType::Gitea => Arc::new(gitea::Gitea::new(forge_config.host.clone(), token)),
     };
 
     // Run the application

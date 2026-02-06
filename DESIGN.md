@@ -580,7 +580,7 @@ grit/
 
 ## Implementation Phases
 
-### Phase 1: Foundation (MVP)
+### Phase 1: Foundation (MVP) ✅
 
 - Core app skeleton with ratatui
 - GitHub adapter (single forge)
@@ -590,13 +590,17 @@ grit/
 
 **Deliverable**: Can browse GitHub PRs for repos you have access to.
 
-### Phase 2: Interactivity
+### Phase 2: Interactivity + Polish ✅
 
-- Create/merge/close PRs
-- Comment on PRs
-- Diff viewer with syntax highlighting
-- Issue support
-- OAuth flow for GitHub
+- Merge/close PRs with method selection
+- Comment on PRs and issues via `$EDITOR`
+- Submit PR reviews (approve, request changes, comment)
+- External pager for diffs (delta, less, bat, etc.)
+- Search in list views and content views
+- OAuth device flow for GitHub
+- Disk cache with stale-while-revalidate
+- Generation counter for async state consistency
+- Open in browser, copy URL, refresh
 
 **Deliverable**: Full PR workflow without leaving terminal.
 
@@ -605,7 +609,6 @@ grit/
 - GitLab adapter
 - Gitea adapter
 - Forge auto-detection from git remote
-- Disk cache
 - Config file support
 
 **Deliverable**: Works with multiple forges in the same session.
@@ -614,16 +617,14 @@ grit/
 
 - Keyboard customization
 - Themes
-- CI/Actions viewing
 - Review submission with inline comments
-- Search
 - Offline mode
 
 **Deliverable**: Production-ready tool.
 
 ## Open Questions
 
-1. **Diff viewing**: Build custom renderer or shell out to `delta`/`diff-so-fancy`?
+1. ~~**Diff viewing**: Build custom renderer or shell out to `delta`/`diff-so-fancy`?~~ **Resolved**: Shell out to the user's configured pager via stdin piping, same as git.
 2. **Inline comments**: Worth the complexity for v1?
 3. **Notifications**: Polling vs webhooks vs leave to other tools?
 4. **Merge conflict resolution**: In scope or defer to git CLI?

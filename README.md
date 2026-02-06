@@ -201,6 +201,19 @@ All data loading is async via tokio, with an mpsc channel for dispatching action
 
 Data is cached to `~/.cache/grit/` as JSON. On navigation, cached data is served immediately for instant rendering, then a background API call refreshes the data in place without resetting scroll position.
 
+## Development
+
+This project uses [just](https://github.com/casey/just) as a command runner:
+
+```bash
+just          # list available recipes
+just build    # cargo build
+just test     # cargo test
+just clippy   # cargo clippy -- -D warnings
+just fmt      # cargo fmt
+just ci       # run fmt-check, clippy, and tests
+```
+
 ## Dependencies
 
 - [ratatui](https://github.com/ratatui-org/ratatui) + [crossterm](https://github.com/crossterm-rs/crossterm) - Terminal UI

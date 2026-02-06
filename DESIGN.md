@@ -604,12 +604,13 @@ grit/
 
 **Deliverable**: Full PR workflow without leaving terminal.
 
-### Phase 3: Multi-Forge
+### Phase 3: Multi-Forge ✅
 
 - GitLab adapter
 - Gitea adapter
 - Forge auto-detection from git remote
 - Config file support
+- CLI subcommands (`grit config explain|init|path`)
 
 **Deliverable**: Works with multiple forges in the same session.
 

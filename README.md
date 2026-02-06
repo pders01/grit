@@ -1,6 +1,6 @@
 # grit
 
-A terminal user interface (TUI) for browsing and interacting with GitHub repositories, pull requests, issues, commits, and actions.
+A terminal user interface (TUI) for browsing and interacting with Git forge repositories (GitHub, GitLab, Gitea/Forgejo) — pull requests, issues, commits, and actions.
 
 ![Rust](https://img.shields.io/badge/rust-1.70%2B-orange)
 ![License](https://img.shields.io/badge/license-MIT-blue)
@@ -77,7 +77,11 @@ On first run without any existing token, grit will walk you through the OAuth de
 ## Usage
 
 ```bash
-grit
+grit                        # launch TUI (default)
+grit config explain         # print documented example config
+grit config init            # write default config to ~/.config/grit/config.toml
+grit config init --force    # overwrite existing config file
+grit config path            # print config file path
 ```
 
 ### Keybindings
@@ -160,12 +164,16 @@ This works with diff-aware pagers like [delta](https://github.com/dandavison/del
 
 ```
 src/
-├── main.rs            # Entry point, event loop, TUI suspend/resume
+├── main.rs            # Entry point, CLI parsing, event loop, TUI suspend/resume
 ├── app.rs             # Application state machine and event handling
 ├── action.rs          # Action enum for state transitions
 ├── event.rs           # Event types (key, tick, render)
 ├── tui.rs             # Terminal setup, event stream, cleanup
-├── github.rs          # GitHub API client (octocrab + reqwest)
+├── config.rs          # Config loading, forge auto-detection, example config
+├── forge.rs           # Forge trait abstraction
+├── github.rs          # GitHub adapter (octocrab + reqwest)
+├── gitlab.rs          # GitLab adapter
+├── gitea.rs           # Gitea/Forgejo adapter
 ├── auth.rs            # Token loading chain and OAuth device flow
 ├── cache.rs           # XDG-compatible disk cache
 ├── pager.rs           # External pager detection and invocation
@@ -200,6 +208,7 @@ Data is cached to `~/.cache/grit/` as JSON. On navigation, cached data is served
 - [tokio](https://github.com/tokio-rs/tokio) - Async runtime
 - [open](https://github.com/Byron/open-rs) - Open URLs in browser
 - [arboard](https://github.com/1Password/arboard) - Clipboard access
+- [clap](https://github.com/clap-rs/clap) - CLI argument parsing
 - [dirs](https://github.com/dirs-dev/dirs-rs) - XDG directory resolution
 
 ## License

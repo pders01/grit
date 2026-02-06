@@ -16,6 +16,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    let w = area.width.saturating_sub(2) as usize;
+    let fixed = 40; // repo_name(30) + space(1) + stars(7) + spaces(2)
+    let flex = w.saturating_sub(fixed).max(10);
+
     let items: Vec<ListItem> = app
         .repos
         .iter()
@@ -33,8 +37,8 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                 .description
                 .as_ref()
                 .map(|d| {
-                    if d.len() > 60 {
-                        format!("{}...", &d[..57])
+                    if d.len() > flex {
+                        format!("{}...", &d[..flex.saturating_sub(3)])
                     } else {
                         d.clone()
                     }
@@ -56,7 +60,7 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::DarkGray),
                 ),
                 Span::raw("  "),
-                Span::styled(description, Style::default().fg(Color::Gray)),
+                Span::styled(format!("{:<flex$}", description), Style::default().fg(Color::Gray)),
             ]);
 
             ListItem::new(line)

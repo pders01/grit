@@ -49,6 +49,10 @@ fn render_review_requests(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    let w = area.width.saturating_sub(2) as usize;
+    let fixed = 57; // repo(25) + space(1) + #num(6) + space(1) + spaces(2) + @author(~16) + spaces(2) + age(~4)
+    let flex = w.saturating_sub(fixed).max(10);
+
     let items: Vec<ListItem> = app
         .review_requests
         .iter()
@@ -70,8 +74,8 @@ fn render_review_requests(frame: &mut Frame, app: &App, area: Rect) {
                 repo
             };
 
-            let title = if req.pr_title.len() > 35 {
-                format!("{}...", &req.pr_title[..32])
+            let title = if req.pr_title.len() > flex {
+                format!("{}...", &req.pr_title[..flex.saturating_sub(3)])
             } else {
                 req.pr_title.clone()
             };
@@ -89,7 +93,7 @@ fn render_review_requests(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::Gray),
                 ),
                 Span::raw(" "),
-                Span::styled(title, style),
+                Span::styled(format!("{:<flex$}", title), style),
                 Span::raw("  "),
                 Span::styled(format!("@{}", req.author), Style::default().fg(Color::Gray)),
                 Span::raw("  "),
@@ -143,6 +147,10 @@ fn render_my_prs(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    let w = area.width.saturating_sub(2) as usize;
+    let fixed = 43; // repo(25) + space(1) + #num(6) + space(1) + spaces(2) + status(~8)
+    let flex = w.saturating_sub(fixed).max(10);
+
     let items: Vec<ListItem> = app
         .my_prs
         .iter()
@@ -164,8 +172,8 @@ fn render_my_prs(frame: &mut Frame, app: &App, area: Rect) {
                 repo
             };
 
-            let title = if pr.title.len() > 40 {
-                format!("{}...", &pr.title[..37])
+            let title = if pr.title.len() > flex {
+                format!("{}...", &pr.title[..flex.saturating_sub(3)])
             } else {
                 pr.title.clone()
             };
@@ -189,7 +197,7 @@ fn render_my_prs(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(Color::Gray),
                 ),
                 Span::raw(" "),
-                Span::styled(title, style),
+                Span::styled(format!("{:<flex$}", title), style),
                 Span::raw("  "),
                 Span::styled(status, Style::default().fg(status_color)),
             ]);

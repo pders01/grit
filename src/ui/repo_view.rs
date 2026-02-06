@@ -80,6 +80,10 @@ fn render_pr_preview(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    let w = area.width.saturating_sub(2) as usize;
+    let fixed = 31; // #num(6) + space(1) + state(6) + space(1) + space(1) + @author(16)
+    let flex = w.saturating_sub(fixed).max(10);
+
     let items: Vec<ListItem> = app
         .prs
         .iter()
@@ -100,8 +104,8 @@ fn render_pr_preview(frame: &mut Frame, app: &App, area: Rect) {
                 PrState::Merged => Color::Magenta,
             };
 
-            let title = if pr.title.len() > 45 {
-                format!("{}...", &pr.title[..42])
+            let title = if pr.title.len() > flex {
+                format!("{}...", &pr.title[..flex.saturating_sub(3)])
             } else {
                 pr.title.clone()
             };
@@ -120,7 +124,7 @@ fn render_pr_preview(frame: &mut Frame, app: &App, area: Rect) {
                 Span::raw(" "),
                 Span::styled(format!("{:6}", pr.state), Style::default().fg(state_color)),
                 Span::raw(" "),
-                Span::styled(format!("{:<45}", title), style),
+                Span::styled(format!("{:<flex$}", title), style),
                 Span::raw(" "),
                 Span::styled(format!("@{:<15}", author), Style::default().fg(Color::Gray)),
             ]);
@@ -154,6 +158,10 @@ fn render_issues(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    let w = area.width.saturating_sub(2) as usize;
+    let fixed = 50; // #num(6) + space(1) + state(6) + space(1) + space(1) + labels(18) + space(1) + @author(16)
+    let flex = w.saturating_sub(fixed).max(10);
+
     let items: Vec<ListItem> = app
         .issues
         .iter()
@@ -173,8 +181,8 @@ fn render_issues(frame: &mut Frame, app: &App, area: Rect) {
                 IssueState::Closed => Color::Red,
             };
 
-            let title = if issue.title.len() > 40 {
-                format!("{}...", &issue.title[..37])
+            let title = if issue.title.len() > flex {
+                format!("{}...", &issue.title[..flex.saturating_sub(3)])
             } else {
                 issue.title.clone()
             };
@@ -207,7 +215,7 @@ fn render_issues(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(state_color),
                 ),
                 Span::raw(" "),
-                Span::styled(format!("{:<40}", title), style),
+                Span::styled(format!("{:<flex$}", title), style),
                 Span::raw(" "),
                 Span::styled(
                     format!("{:<18}", labels),
@@ -246,6 +254,10 @@ fn render_commits(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    let w = area.width.saturating_sub(2) as usize;
+    let fixed = 29; // sha(7) + space(1) + space(1) + @author(16) + space(1) + age(3)
+    let flex = w.saturating_sub(fixed).max(10);
+
     let items: Vec<ListItem> = app
         .commits
         .iter()
@@ -260,8 +272,8 @@ fn render_commits(frame: &mut Frame, app: &App, area: Rect) {
                 Style::default()
             };
 
-            let message = if commit.message.len() > 50 {
-                format!("{}...", &commit.message[..47])
+            let message = if commit.message.len() > flex {
+                format!("{}...", &commit.message[..flex.saturating_sub(3)])
             } else {
                 commit.message.clone()
             };
@@ -279,7 +291,7 @@ fn render_commits(frame: &mut Frame, app: &App, area: Rect) {
             let line = Line::from(vec![
                 Span::styled(short_sha, Style::default().fg(Color::Yellow)),
                 Span::raw(" "),
-                Span::styled(format!("{:<50}", message), style),
+                Span::styled(format!("{:<flex$}", message), style),
                 Span::raw(" "),
                 Span::styled(format!("@{:<15}", author), Style::default().fg(Color::Cyan)),
                 Span::raw(" "),
@@ -315,6 +327,10 @@ fn render_actions(frame: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
+    let w = area.width.saturating_sub(2) as usize;
+    let fixed = 31; // status(2) + space(1) + space(1) + branch(12) + space(1) + event(10) + space(1) + age(3)
+    let flex = w.saturating_sub(fixed).max(10);
+
     let items: Vec<ListItem> = app
         .action_runs
         .iter()
@@ -348,8 +364,8 @@ fn render_actions(frame: &mut Frame, app: &App, area: Rect) {
                 ActionStatus::Queued => ("◯".to_string(), Color::Gray),
             };
 
-            let name = if run.name.len() > 30 {
-                format!("{}...", &run.name[..27])
+            let name = if run.name.len() > flex {
+                format!("{}...", &run.name[..flex.saturating_sub(3)])
             } else {
                 run.name.clone()
             };
@@ -368,7 +384,7 @@ fn render_actions(frame: &mut Frame, app: &App, area: Rect) {
                     Style::default().fg(status_color),
                 ),
                 Span::raw(" "),
-                Span::styled(format!("{:<30}", name), style),
+                Span::styled(format!("{:<flex$}", name), style),
                 Span::raw(" "),
                 Span::styled(format!("{:<12}", branch), Style::default().fg(Color::Cyan)),
                 Span::raw(" "),

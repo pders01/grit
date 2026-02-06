@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod auth;
 mod cache;
+mod config;
 mod error;
 mod event;
 mod forge;
@@ -20,6 +21,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 
 use crate::action::{Action, EditorContext};
 use crate::app::App;
+use crate::config::{Config, ForgeType};
 use crate::event::Event;
 use crate::forge::Forge;
 use crate::github::GitHub;
@@ -40,13 +42,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         original_hook(panic_info);
     }));
 
-    // Load GitHub token (env → gh CLI → stored → device flow)
-    let token = auth::load_token()
+    // Load config and detect forge
+    let config = Config::load();
+    let forge_config = config::detect_forge(&config)
+        .or_else(|| config.forges.first())
+        .ok_or("No forge configured")?
+        .clone();
+
+    // Load token for the detected forge
+    let token = auth::load_forge_token(&forge_config)
         .await
         .map_err(Box::<dyn std::error::Error>::from)?;
 
     // Initialize forge client
-    let forge: Arc<dyn Forge> = Arc::new(GitHub::new(token)?);
+    let forge: Arc<dyn Forge> = match forge_config.forge_type {
+        ForgeType::GitHub => Arc::new(GitHub::new(token)?),
+        ForgeType::GitLab => {
+            return Err("GitLab support not yet implemented".into());
+        }
+        ForgeType::Gitea => {
+            return Err("Gitea support not yet implemented".into());
+        }
+    };
 
     // Run the application
     let result = run(forge).await;

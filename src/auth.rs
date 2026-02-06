@@ -1,10 +1,12 @@
 use std::io::Write;
 use std::time::Duration;
 
-/// Try to get token from `gh auth token` CLI
-fn try_gh_cli_token() -> Option<String> {
-    let output = std::process::Command::new("gh")
-        .args(["auth", "token"])
+use crate::config::{ForgeConfig, ForgeType};
+
+/// Try to run a CLI command and capture stdout as a token
+fn try_cli_token(command: &str) -> Option<String> {
+    let output = std::process::Command::new("sh")
+        .args(["-c", command])
         .output()
         .ok()?;
 
@@ -17,7 +19,93 @@ fn try_gh_cli_token() -> Option<String> {
     None
 }
 
-/// Get the config file path: ~/.config/grit/token
+/// Get the forge-specific stored token path: ~/.config/grit/tokens/{forge_name}
+fn forge_token_path(forge_name: &str) -> Option<std::path::PathBuf> {
+    let config_dir = dirs::config_dir()?;
+    Some(config_dir.join("grit").join("tokens").join(forge_name))
+}
+
+/// Load token from forge-specific storage
+fn load_forge_stored_token(forge_name: &str) -> Option<String> {
+    let path = forge_token_path(forge_name)?;
+    let token = std::fs::read_to_string(path).ok()?;
+    let token = token.trim().to_string();
+    if token.is_empty() {
+        None
+    } else {
+        Some(token)
+    }
+}
+
+/// Save token to forge-specific storage
+fn save_forge_token(forge_name: &str, token: &str) -> std::io::Result<()> {
+    if let Some(path) = forge_token_path(forge_name) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, token)?;
+    }
+    Ok(())
+}
+
+/// Load a token for any forge, trying multiple sources:
+/// 1. Forge-specific env var (from config)
+/// 2. Stored token from ~/.config/grit/tokens/{forge_name}
+/// 3. CLI command (from config)
+/// 4. GitHub-only: OAuth device flow
+pub async fn load_forge_token(forge_config: &ForgeConfig) -> Result<String, String> {
+    // 1. Environment variable from config
+    if let Some(env_var) = &forge_config.token_env {
+        if let Ok(token) = std::env::var(env_var) {
+            if !token.is_empty() {
+                return Ok(token);
+            }
+        }
+    }
+
+    // 2. Forge-specific stored token
+    if let Some(token) = load_forge_stored_token(&forge_config.name) {
+        return Ok(token);
+    }
+
+    // Also check legacy stored token for backward compat with GitHub
+    if forge_config.forge_type == ForgeType::GitHub {
+        if let Some(token) = load_stored_token() {
+            return Ok(token);
+        }
+    }
+
+    // 3. CLI command from config
+    if let Some(cmd) = &forge_config.token_command {
+        if let Some(token) = try_cli_token(cmd) {
+            let _ = save_forge_token(&forge_config.name, &token);
+            return Ok(token);
+        }
+    }
+
+    // 4. GitHub-only: OAuth device flow
+    if forge_config.forge_type == ForgeType::GitHub {
+        println!("No GitHub token found.");
+        println!("Starting GitHub OAuth device flow...");
+
+        let token = device_flow_auth(GITHUB_CLIENT_ID).await?;
+        if let Err(e) = save_forge_token(&forge_config.name, &token) {
+            eprintln!("Warning: could not save token: {}", e);
+        }
+        return Ok(token);
+    }
+
+    Err(format!(
+        "No token found for forge '{}'. Set {} or configure a token_command.",
+        forge_config.name,
+        forge_config
+            .token_env
+            .as_deref()
+            .unwrap_or("a token env var")
+    ))
+}
+
+/// Get the legacy config file path: ~/.config/grit/token
 fn token_path() -> Option<std::path::PathBuf> {
     let config_dir = dirs::config_dir()?;
     Some(config_dir.join("grit").join("token"))
@@ -33,17 +121,6 @@ fn load_stored_token() -> Option<String> {
     } else {
         Some(token)
     }
-}
-
-/// Save token to disk
-fn save_token(token: &str) -> std::io::Result<()> {
-    if let Some(path) = token_path() {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, token)?;
-    }
-    Ok(())
 }
 
 /// GitHub OAuth device flow
@@ -139,42 +216,3 @@ async fn device_flow_auth(client_id: &str) -> Result<String, String> {
 // It is NOT secret - OAuth Apps use client_id publicly for device flow.
 // Users should register their own app or this can be updated with an official one.
 const GITHUB_CLIENT_ID: &str = "Ov23liYMRxFDN38Slfzr";
-
-/// Load a GitHub token, trying multiple sources in order:
-/// 1. GITHUB_TOKEN env var (instant)
-/// 2. Stored token from ~/.config/grit/token (fast file read)
-/// 3. gh CLI token (spawns subprocess - slow)
-/// 4. OAuth device flow (interactive)
-pub async fn load_token() -> Result<String, String> {
-    // 1. Environment variable - instant
-    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
-        if !token.is_empty() {
-            return Ok(token);
-        }
-    }
-
-    // 2. Stored token - fast file read
-    if let Some(token) = load_stored_token() {
-        return Ok(token);
-    }
-
-    // 3. gh CLI - spawns subprocess, can take 200-500ms
-    if let Some(token) = try_gh_cli_token() {
-        // Save it so next launch skips the subprocess
-        let _ = save_token(&token);
-        return Ok(token);
-    }
-
-    // 4. Device flow
-    println!("No GitHub token found.");
-    println!("Starting GitHub OAuth device flow...");
-
-    let token = device_flow_auth(GITHUB_CLIENT_ID).await?;
-
-    // Save for future use
-    if let Err(e) = save_token(&token) {
-        eprintln!("Warning: could not save token: {}", e);
-    }
-
-    Ok(token)
-}

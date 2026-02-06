@@ -280,3 +280,104 @@ pub struct PullRequest {
     pub merged_at: Option<DateTime<Utc>>,
     pub closed_at: Option<DateTime<Utc>>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // MergeMethod::as_api_str
+    #[test]
+    fn merge_method_api_str_merge() {
+        assert_eq!(MergeMethod::Merge.as_api_str(), "merge");
+    }
+
+    #[test]
+    fn merge_method_api_str_squash() {
+        assert_eq!(MergeMethod::Squash.as_api_str(), "squash");
+    }
+
+    #[test]
+    fn merge_method_api_str_rebase() {
+        assert_eq!(MergeMethod::Rebase.as_api_str(), "rebase");
+    }
+
+    // MergeMethod::Display
+    #[test]
+    fn merge_method_display_merge() {
+        assert_eq!(MergeMethod::Merge.to_string(), "Merge commit");
+    }
+
+    #[test]
+    fn merge_method_display_squash() {
+        assert_eq!(MergeMethod::Squash.to_string(), "Squash and merge");
+    }
+
+    #[test]
+    fn merge_method_display_rebase() {
+        assert_eq!(MergeMethod::Rebase.to_string(), "Rebase and merge");
+    }
+
+    // ReviewEvent::as_api_str
+    #[test]
+    fn review_event_api_str_approve() {
+        assert_eq!(ReviewEvent::Approve.as_api_str(), "APPROVE");
+    }
+
+    #[test]
+    fn review_event_api_str_request_changes() {
+        assert_eq!(ReviewEvent::RequestChanges.as_api_str(), "REQUEST_CHANGES");
+    }
+
+    #[test]
+    fn review_event_api_str_comment() {
+        assert_eq!(ReviewEvent::Comment.as_api_str(), "COMMENT");
+    }
+
+    // ReviewEvent::Display
+    #[test]
+    fn review_event_display_approve() {
+        assert_eq!(ReviewEvent::Approve.to_string(), "Approve");
+    }
+
+    #[test]
+    fn review_event_display_request_changes() {
+        assert_eq!(ReviewEvent::RequestChanges.to_string(), "Request changes");
+    }
+
+    #[test]
+    fn review_event_display_comment() {
+        assert_eq!(ReviewEvent::Comment.to_string(), "Comment");
+    }
+
+    // PrState::Display
+    #[test]
+    fn pr_state_display() {
+        assert_eq!(PrState::Open.to_string(), "Open");
+        assert_eq!(PrState::Closed.to_string(), "Closed");
+        assert_eq!(PrState::Merged.to_string(), "Merged");
+    }
+
+    // IssueState::Display
+    #[test]
+    fn issue_state_display() {
+        assert_eq!(IssueState::Open.to_string(), "Open");
+        assert_eq!(IssueState::Closed.to_string(), "Closed");
+    }
+
+    // ActionStatus::Display
+    #[test]
+    fn action_status_display() {
+        assert_eq!(ActionStatus::Queued.to_string(), "Queued");
+        assert_eq!(ActionStatus::InProgress.to_string(), "Running");
+        assert_eq!(ActionStatus::Completed.to_string(), "Done");
+    }
+
+    // ChecksStatus::Display
+    #[test]
+    fn checks_status_display() {
+        assert_eq!(ChecksStatus::Pending.to_string(), "⏳");
+        assert_eq!(ChecksStatus::Success.to_string(), "✓");
+        assert_eq!(ChecksStatus::Failure.to_string(), "✗");
+        assert_eq!(ChecksStatus::None.to_string(), "-");
+    }
+}

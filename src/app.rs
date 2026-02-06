@@ -1780,7 +1780,7 @@ impl App {
     }
 
     /// Construct GitHub URL for the current item
-    fn current_item_url(&self) -> Option<String> {
+    pub(crate) fn current_item_url(&self) -> Option<String> {
         match self.screen {
             Screen::Home => match self.home_section {
                 HomeSection::ReviewRequests => {
@@ -1851,6 +1851,1140 @@ impl App {
                     owner, repo, commit.sha
                 ))
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::github::GitHub;
+    use crate::types::*;
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    // ── Test helpers ──
+
+    fn test_app() -> (App, mpsc::UnboundedReceiver<Action>) {
+        let github = GitHub::new("dummy_token".to_string()).unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+        (App::new(github, tx), rx)
+    }
+
+    fn key(code: KeyCode) -> Event {
+        Event::Key(KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    fn key_ctrl(c: char) -> Event {
+        Event::Key(KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        })
+    }
+
+    fn make_repo(name: &str) -> Repository {
+        Repository {
+            owner: "testowner".to_string(),
+            name: name.to_string(),
+            description: Some("A test repo".to_string()),
+            url: format!("https://github.com/testowner/{}", name),
+            stars: 42,
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_pr_summary(number: u64, title: &str) -> PrSummary {
+        PrSummary {
+            number,
+            title: title.to_string(),
+            state: PrState::Open,
+            author: "testauthor".to_string(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_issue(number: u64, title: &str) -> Issue {
+        Issue {
+            number,
+            title: title.to_string(),
+            state: IssueState::Open,
+            author: "testauthor".to_string(),
+            labels: vec![],
+            comments: 0,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_commit(sha: &str, message: &str) -> Commit {
+        Commit {
+            sha: sha.to_string(),
+            message: message.to_string(),
+            author: "testauthor".to_string(),
+            date: chrono::Utc::now(),
+        }
+    }
+
+    fn make_review_request(owner: &str, repo: &str, number: u64) -> ReviewRequest {
+        ReviewRequest {
+            repo_owner: owner.to_string(),
+            repo_name: repo.to_string(),
+            pr_number: number,
+            pr_title: format!("PR #{}", number),
+            author: "someone".to_string(),
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_my_pr(owner: &str, repo: &str, number: u64) -> MyPr {
+        MyPr {
+            repo_owner: owner.to_string(),
+            repo_name: repo.to_string(),
+            number,
+            title: format!("My PR #{}", number),
+            state: PrState::Open,
+            checks_status: ChecksStatus::Success,
+            updated_at: chrono::Utc::now(),
+        }
+    }
+
+    fn make_pull_request(number: u64, body: &str) -> PullRequest {
+        PullRequest {
+            number,
+            title: format!("PR #{}", number),
+            body: Some(body.to_string()),
+            state: PrState::Open,
+            author: "testauthor".to_string(),
+            head_branch: "feature".to_string(),
+            base_branch: "main".to_string(),
+            stats: PrStats {
+                additions: 10,
+                deletions: 5,
+                changed_files: 3,
+                commits: 2,
+                comments: 1,
+            },
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            merged_at: None,
+            closed_at: None,
+        }
+    }
+
+    fn make_commit_detail(sha: &str, message: &str, files: Vec<CommitFile>) -> CommitDetail {
+        CommitDetail {
+            sha: sha.to_string(),
+            message: message.to_string(),
+            author: "testauthor".to_string(),
+            date: chrono::Utc::now(),
+            stats: CommitStats {
+                additions: 10,
+                deletions: 5,
+                total: 15,
+            },
+            files,
+        }
+    }
+
+    fn make_action_run(id: u64, name: &str) -> ActionRun {
+        ActionRun {
+            id,
+            name: name.to_string(),
+            status: ActionStatus::Completed,
+            conclusion: Some(ActionConclusion::Success),
+            branch: "main".to_string(),
+            event: "push".to_string(),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    // ── Key handling tests ──
+
+    mod key_handling {
+        use super::*;
+
+        // Normal mode
+
+        #[tokio::test]
+        async fn q_on_home_quits() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('q')));
+            assert!(matches!(action, Action::Quit));
+        }
+
+        #[tokio::test]
+        async fn q_on_repo_list_goes_back() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            let action = app.handle_event(key(KeyCode::Char('q')));
+            assert!(matches!(action, Action::Back));
+        }
+
+        #[tokio::test]
+        async fn esc_on_home_quits() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Esc));
+            assert!(matches!(action, Action::Quit));
+        }
+
+        #[tokio::test]
+        async fn esc_on_repo_list_goes_back() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            let action = app.handle_event(key(KeyCode::Esc));
+            assert!(matches!(action, Action::Back));
+        }
+
+        #[tokio::test]
+        async fn esc_with_active_search_clears() {
+            let (mut app, _rx) = test_app();
+            app.search.active = true;
+            let action = app.handle_event(key(KeyCode::Esc));
+            assert!(matches!(action, Action::ClearSearch));
+        }
+
+        #[tokio::test]
+        async fn j_scrolls_down() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('j')));
+            assert!(matches!(action, Action::ScrollDown));
+        }
+
+        #[tokio::test]
+        async fn down_scrolls_down() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Down));
+            assert!(matches!(action, Action::ScrollDown));
+        }
+
+        #[tokio::test]
+        async fn k_scrolls_up() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('k')));
+            assert!(matches!(action, Action::ScrollUp));
+        }
+
+        #[tokio::test]
+        async fn up_scrolls_up() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Up));
+            assert!(matches!(action, Action::ScrollUp));
+        }
+
+        #[tokio::test]
+        async fn g_goes_to_top() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('g')));
+            assert!(matches!(action, Action::GoToTop));
+        }
+
+        #[tokio::test]
+        async fn home_goes_to_top() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Home));
+            assert!(matches!(action, Action::GoToTop));
+        }
+
+        #[tokio::test]
+        async fn big_g_goes_to_bottom() {
+            let (app, _rx) = test_app();
+            // G is uppercase, which crossterm sends as Char('G') with SHIFT
+            let action = app.handle_event(key(KeyCode::Char('G')));
+            assert!(matches!(action, Action::GoToBottom));
+        }
+
+        #[tokio::test]
+        async fn end_goes_to_bottom() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::End));
+            assert!(matches!(action, Action::GoToBottom));
+        }
+
+        #[tokio::test]
+        async fn ctrl_d_pages_down() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key_ctrl('d'));
+            assert!(matches!(action, Action::PageDown));
+        }
+
+        #[tokio::test]
+        async fn ctrl_u_pages_up() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key_ctrl('u'));
+            assert!(matches!(action, Action::PageUp));
+        }
+
+        #[tokio::test]
+        async fn slash_enters_search() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('/')));
+            assert!(matches!(action, Action::EnterSearchMode));
+        }
+
+        #[tokio::test]
+        async fn n_with_active_search_next() {
+            let (mut app, _rx) = test_app();
+            app.search.active = true;
+            let action = app.handle_event(key(KeyCode::Char('n')));
+            assert!(matches!(action, Action::SearchNext));
+        }
+
+        #[tokio::test]
+        async fn big_n_with_active_search_prev() {
+            let (mut app, _rx) = test_app();
+            app.search.active = true;
+            let action = app.handle_event(key(KeyCode::Char('N')));
+            assert!(matches!(action, Action::SearchPrev));
+        }
+
+        #[tokio::test]
+        async fn n_without_search_is_not_search_next() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('n')));
+            assert!(!matches!(action, Action::SearchNext));
+        }
+
+        #[tokio::test]
+        async fn enter_selects() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Enter));
+            assert!(matches!(action, Action::Select));
+        }
+
+        #[tokio::test]
+        async fn d_on_pr_detail_views_diff() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::PrDetail;
+            let action = app.handle_event(key(KeyCode::Char('d')));
+            assert!(matches!(action, Action::ViewDiff));
+        }
+
+        #[tokio::test]
+        async fn d_on_commit_detail_views_diff() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::CommitDetail;
+            let action = app.handle_event(key(KeyCode::Char('d')));
+            assert!(matches!(action, Action::ViewDiff));
+        }
+
+        #[tokio::test]
+        async fn d_on_repo_list_not_view_diff() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            let action = app.handle_event(key(KeyCode::Char('d')));
+            assert!(!matches!(action, Action::ViewDiff));
+        }
+
+        #[tokio::test]
+        async fn r_refreshes() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('r')));
+            assert!(matches!(action, Action::Refresh));
+        }
+
+        #[tokio::test]
+        async fn o_opens_in_browser() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('o')));
+            assert!(matches!(action, Action::OpenInBrowser));
+        }
+
+        #[tokio::test]
+        async fn y_yanks_url() {
+            let (app, _rx) = test_app();
+            let action = app.handle_event(key(KeyCode::Char('y')));
+            assert!(matches!(action, Action::YankUrl));
+        }
+
+        #[tokio::test]
+        async fn m_on_pr_detail_shows_merge() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::PrDetail;
+            let action = app.handle_event(key(KeyCode::Char('m')));
+            assert!(matches!(action, Action::ShowMergeMethodSelect));
+        }
+
+        #[tokio::test]
+        async fn m_on_repo_list_is_none() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            let action = app.handle_event(key(KeyCode::Char('m')));
+            assert!(matches!(action, Action::None));
+        }
+
+        #[tokio::test]
+        async fn big_r_on_pr_detail_shows_review() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::PrDetail;
+            let action = app.handle_event(key(KeyCode::Char('R')));
+            assert!(matches!(action, Action::ShowReviewSelect));
+        }
+
+        #[tokio::test]
+        async fn p_on_repo_view_switches_tab() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            let action = app.handle_event(key(KeyCode::Char('p')));
+            assert!(matches!(
+                action,
+                Action::SwitchRepoTab(RepoTab::PullRequests)
+            ));
+        }
+
+        #[tokio::test]
+        async fn i_on_repo_view_switches_tab() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            let action = app.handle_event(key(KeyCode::Char('i')));
+            assert!(matches!(action, Action::SwitchRepoTab(RepoTab::Issues)));
+        }
+
+        #[tokio::test]
+        async fn c_on_repo_view_switches_tab() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            let action = app.handle_event(key(KeyCode::Char('c')));
+            assert!(matches!(action, Action::SwitchRepoTab(RepoTab::Commits)));
+        }
+
+        #[tokio::test]
+        async fn a_on_repo_view_switches_tab() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            let action = app.handle_event(key(KeyCode::Char('a')));
+            assert!(matches!(action, Action::SwitchRepoTab(RepoTab::Actions)));
+        }
+
+        // Search mode
+
+        #[tokio::test]
+        async fn search_esc_exits() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            let action = app.handle_event(key(KeyCode::Esc));
+            assert!(matches!(action, Action::ExitSearchMode));
+        }
+
+        #[tokio::test]
+        async fn search_enter_confirms() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            let action = app.handle_event(key(KeyCode::Enter));
+            assert!(matches!(action, Action::SearchConfirm));
+        }
+
+        #[tokio::test]
+        async fn search_backspace() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            let action = app.handle_event(key(KeyCode::Backspace));
+            assert!(matches!(action, Action::SearchBackspace));
+        }
+
+        #[tokio::test]
+        async fn search_char_input() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            let action = app.handle_event(key(KeyCode::Char('f')));
+            assert!(matches!(action, Action::SearchInput('f')));
+        }
+
+        #[tokio::test]
+        async fn search_other_key_none() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            let action = app.handle_event(key(KeyCode::Tab));
+            assert!(matches!(action, Action::None));
+        }
+
+        // Confirm mode
+
+        #[tokio::test]
+        async fn confirm_y_yes() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Confirm;
+            let action = app.handle_event(key(KeyCode::Char('y')));
+            assert!(matches!(action, Action::ConfirmYes));
+        }
+
+        #[tokio::test]
+        async fn confirm_n_no() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Confirm;
+            let action = app.handle_event(key(KeyCode::Char('n')));
+            assert!(matches!(action, Action::ConfirmNo));
+        }
+
+        #[tokio::test]
+        async fn confirm_esc_no() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Confirm;
+            let action = app.handle_event(key(KeyCode::Esc));
+            assert!(matches!(action, Action::ConfirmNo));
+        }
+
+        // SelectPopup mode
+
+        #[tokio::test]
+        async fn popup_j_down() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::SelectPopup;
+            let action = app.handle_event(key(KeyCode::Char('j')));
+            assert!(matches!(action, Action::PopupDown));
+        }
+
+        #[tokio::test]
+        async fn popup_k_up() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::SelectPopup;
+            let action = app.handle_event(key(KeyCode::Char('k')));
+            assert!(matches!(action, Action::PopupUp));
+        }
+
+        #[tokio::test]
+        async fn popup_enter_select() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::SelectPopup;
+            let action = app.handle_event(key(KeyCode::Enter));
+            assert!(matches!(action, Action::PopupSelect));
+        }
+
+        #[tokio::test]
+        async fn popup_esc_cancels() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::SelectPopup;
+            let action = app.handle_event(key(KeyCode::Esc));
+            assert!(matches!(action, Action::ConfirmNo));
+        }
+    }
+
+    // ── State transition tests ──
+
+    mod state_transitions {
+        use super::*;
+
+        // Navigation
+
+        #[tokio::test]
+        async fn quit_sets_should_quit() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::Quit);
+            assert!(app.should_quit);
+        }
+
+        #[tokio::test]
+        async fn back_from_home_quits() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::Back);
+            assert!(app.should_quit);
+        }
+
+        #[tokio::test]
+        async fn back_from_repo_list_to_home() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.update(Action::Back);
+            assert_eq!(app.screen, Screen::Home);
+        }
+
+        #[tokio::test]
+        async fn back_from_repo_view_to_repo_list() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            app.repo_tab = RepoTab::Issues;
+            app.prs = vec![make_pr_summary(1, "test")];
+            app.issues = vec![make_issue(1, "test")];
+            app.commits = vec![make_commit("abc123", "test")];
+            app.update(Action::Back);
+            assert_eq!(app.screen, Screen::RepoList);
+            assert_eq!(app.repo_tab, RepoTab::PullRequests);
+            assert!(app.prs.is_empty());
+            assert!(app.issues.is_empty());
+            assert!(app.commits.is_empty());
+        }
+
+        #[tokio::test]
+        async fn back_from_pr_detail() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::PrDetail;
+            app.prev_screen = Some(Screen::RepoView);
+            app.current_pr = Some(make_pull_request(1, "body"));
+            app.scroll_offset = 5;
+            app.update(Action::Back);
+            assert_eq!(app.screen, Screen::RepoView);
+            assert!(app.current_pr.is_none());
+            assert_eq!(app.scroll_offset, 0);
+        }
+
+        #[tokio::test]
+        async fn back_from_commit_detail() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::CommitDetail;
+            app.prev_screen = Some(Screen::RepoView);
+            app.current_commit = Some(make_commit_detail("abc123", "msg", vec![]));
+            app.update(Action::Back);
+            assert_eq!(app.screen, Screen::RepoView);
+            assert!(app.current_commit.is_none());
+            assert_eq!(app.scroll_offset, 0);
+        }
+
+        #[tokio::test]
+        async fn next_tab_on_home_toggles_section() {
+            let (mut app, _rx) = test_app();
+            assert_eq!(app.home_section, HomeSection::ReviewRequests);
+            app.update(Action::NextTab);
+            assert_eq!(app.home_section, HomeSection::MyPrs);
+            app.update(Action::NextTab);
+            assert_eq!(app.home_section, HomeSection::ReviewRequests);
+        }
+
+        #[tokio::test]
+        async fn next_tab_on_repo_view_cycles() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            assert_eq!(app.repo_tab, RepoTab::PullRequests);
+            app.update(Action::NextTab);
+            assert_eq!(app.repo_tab, RepoTab::Issues);
+            app.update(Action::NextTab);
+            assert_eq!(app.repo_tab, RepoTab::Commits);
+            app.update(Action::NextTab);
+            assert_eq!(app.repo_tab, RepoTab::Actions);
+            app.update(Action::NextTab);
+            assert_eq!(app.repo_tab, RepoTab::PullRequests);
+        }
+
+        #[tokio::test]
+        async fn prev_tab_on_repo_view_cycles_backward() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            assert_eq!(app.repo_tab, RepoTab::PullRequests);
+            app.update(Action::PrevTab);
+            assert_eq!(app.repo_tab, RepoTab::Actions);
+            app.update(Action::PrevTab);
+            assert_eq!(app.repo_tab, RepoTab::Commits);
+            app.update(Action::PrevTab);
+            assert_eq!(app.repo_tab, RepoTab::Issues);
+            app.update(Action::PrevTab);
+            assert_eq!(app.repo_tab, RepoTab::PullRequests);
+        }
+
+        #[tokio::test]
+        async fn switch_repo_tab_sets_tab_and_resets_index() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            app.issue_index = 5;
+            app.update(Action::SwitchRepoTab(RepoTab::Issues));
+            assert_eq!(app.repo_tab, RepoTab::Issues);
+            assert_eq!(app.issue_index, 0);
+        }
+
+        #[tokio::test]
+        async fn refresh_on_home_goes_to_repo_list() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::Refresh);
+            assert_eq!(app.screen, Screen::RepoList);
+            assert!(app.loading);
+        }
+
+        #[tokio::test]
+        async fn refresh_on_repo_list_sets_loading() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.update(Action::Refresh);
+            assert_eq!(app.screen, Screen::RepoList);
+            assert!(app.loading);
+        }
+
+        // Scroll/Index
+
+        #[tokio::test]
+        async fn scroll_down_increments_repo_index() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = vec![make_repo("a"), make_repo("b"), make_repo("c")];
+            app.repo_index = 0;
+            app.update(Action::ScrollDown);
+            assert_eq!(app.repo_index, 1);
+        }
+
+        #[tokio::test]
+        async fn scroll_down_at_end_no_overflow() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = vec![make_repo("a"), make_repo("b")];
+            app.repo_index = 1;
+            app.update(Action::ScrollDown);
+            assert_eq!(app.repo_index, 1);
+        }
+
+        #[tokio::test]
+        async fn scroll_down_empty_list_noop() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.update(Action::ScrollDown);
+            assert_eq!(app.repo_index, 0);
+        }
+
+        #[tokio::test]
+        async fn scroll_up_decrements_repo_index() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = vec![make_repo("a"), make_repo("b")];
+            app.repo_index = 1;
+            app.update(Action::ScrollUp);
+            assert_eq!(app.repo_index, 0);
+        }
+
+        #[tokio::test]
+        async fn scroll_up_at_zero_stays() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = vec![make_repo("a")];
+            app.repo_index = 0;
+            app.update(Action::ScrollUp);
+            assert_eq!(app.repo_index, 0);
+        }
+
+        #[tokio::test]
+        async fn go_to_top_resets_index() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = vec![make_repo("a"), make_repo("b"), make_repo("c")];
+            app.repo_index = 2;
+            app.update(Action::GoToTop);
+            assert_eq!(app.repo_index, 0);
+        }
+
+        #[tokio::test]
+        async fn go_to_bottom_sets_last_index() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = vec![make_repo("a"), make_repo("b"), make_repo("c")];
+            app.update(Action::GoToBottom);
+            assert_eq!(app.repo_index, 2);
+        }
+
+        #[tokio::test]
+        async fn go_to_bottom_empty_list_noop() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.update(Action::GoToBottom);
+            assert_eq!(app.repo_index, 0);
+        }
+
+        #[tokio::test]
+        async fn page_down_advances_by_10_clamped() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            // Create 5 repos — page down should clamp to index 4
+            app.repos = (0..5).map(|i| make_repo(&format!("r{}", i))).collect();
+            app.repo_index = 0;
+            app.update(Action::PageDown);
+            assert_eq!(app.repo_index, 4);
+        }
+
+        #[tokio::test]
+        async fn page_up_decrements_by_10_saturating() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = (0..20).map(|i| make_repo(&format!("r{}", i))).collect();
+            app.repo_index = 5;
+            app.update(Action::PageUp);
+            assert_eq!(app.repo_index, 0);
+        }
+
+        // Data loading (load_id)
+
+        #[tokio::test]
+        async fn home_loaded_matching_id_updates_data() {
+            let (mut app, _rx) = test_app();
+            app.load_id = 1;
+            let rrs = vec![make_review_request("o", "r", 1)];
+            let prs = vec![make_my_pr("o", "r", 2)];
+            app.update(Action::HomeLoaded {
+                review_requests: rrs.clone(),
+                my_prs: prs.clone(),
+                load_id: 1,
+            });
+            assert_eq!(app.review_requests.len(), 1);
+            assert_eq!(app.my_prs.len(), 1);
+            assert!(!app.loading);
+        }
+
+        #[tokio::test]
+        async fn home_loaded_stale_id_ignored() {
+            let (mut app, _rx) = test_app();
+            app.load_id = 2;
+            app.update(Action::HomeLoaded {
+                review_requests: vec![make_review_request("o", "r", 1)],
+                my_prs: vec![],
+                load_id: 1,
+            });
+            assert!(app.review_requests.is_empty());
+        }
+
+        #[tokio::test]
+        async fn repos_loaded_matching_id_updates() {
+            let (mut app, _rx) = test_app();
+            app.load_id = 3;
+            app.repo_index = 10;
+            let repos = vec![make_repo("a"), make_repo("b")];
+            app.update(Action::ReposLoaded(repos, 3));
+            assert_eq!(app.repos.len(), 2);
+            assert_eq!(app.repo_index, 1); // clamped
+        }
+
+        #[tokio::test]
+        async fn repos_loaded_stale_id_ignored() {
+            let (mut app, _rx) = test_app();
+            app.load_id = 5;
+            app.update(Action::ReposLoaded(vec![make_repo("a")], 3));
+            assert!(app.repos.is_empty());
+        }
+
+        #[tokio::test]
+        async fn pr_detail_loaded_first_time_transitions_screen() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            app.load_id = 1;
+            let pr = make_pull_request(42, "test body");
+            app.update(Action::PrDetailLoaded(Box::new(pr), 1));
+            assert_eq!(app.screen, Screen::PrDetail);
+            assert!(app.current_pr.is_some());
+            assert_eq!(app.scroll_offset, 0);
+        }
+
+        #[tokio::test]
+        async fn pr_detail_loaded_already_on_pr_detail_no_scroll_reset() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::PrDetail;
+            app.load_id = 2;
+            app.scroll_offset = 10;
+            let pr = make_pull_request(42, "updated body");
+            app.update(Action::PrDetailLoaded(Box::new(pr), 2));
+            assert_eq!(app.screen, Screen::PrDetail);
+            assert!(app.current_pr.is_some());
+            assert_eq!(app.scroll_offset, 10); // not reset
+        }
+
+        // Popup & confirm
+
+        #[tokio::test]
+        async fn show_merge_method_select() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::ShowMergeMethodSelect);
+            assert_eq!(app.input_mode, InputMode::SelectPopup);
+            assert_eq!(app.popup_items.len(), 3);
+        }
+
+        #[tokio::test]
+        async fn show_review_select() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::ShowReviewSelect);
+            assert_eq!(app.input_mode, InputMode::SelectPopup);
+            assert_eq!(app.popup_items.len(), 3);
+        }
+
+        #[tokio::test]
+        async fn popup_down_increments() {
+            let (mut app, _rx) = test_app();
+            app.popup_items = vec!["a".into(), "b".into(), "c".into()];
+            app.popup_index = 0;
+            app.update(Action::PopupDown);
+            assert_eq!(app.popup_index, 1);
+        }
+
+        #[tokio::test]
+        async fn popup_up_decrements() {
+            let (mut app, _rx) = test_app();
+            app.popup_items = vec!["a".into(), "b".into(), "c".into()];
+            app.popup_index = 2;
+            app.update(Action::PopupUp);
+            assert_eq!(app.popup_index, 1);
+        }
+
+        #[tokio::test]
+        async fn show_confirm_sets_state() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::ShowConfirm(ConfirmAction::ClosePr(42)));
+            assert_eq!(app.input_mode, InputMode::Confirm);
+            assert!(matches!(
+                app.confirm_action,
+                Some(ConfirmAction::ClosePr(42))
+            ));
+        }
+
+        #[tokio::test]
+        async fn confirm_no_resets() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Confirm;
+            app.confirm_action = Some(ConfirmAction::ClosePr(42));
+            app.update(Action::ConfirmNo);
+            assert_eq!(app.input_mode, InputMode::Normal);
+            assert!(app.confirm_action.is_none());
+        }
+
+        // Search state machine
+
+        #[tokio::test]
+        async fn enter_search_mode() {
+            let (mut app, _rx) = test_app();
+            app.search.query = "old".to_string();
+            app.update(Action::EnterSearchMode);
+            assert_eq!(app.input_mode, InputMode::Search);
+            assert!(app.search.query.is_empty());
+        }
+
+        #[tokio::test]
+        async fn search_input_appends() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            app.update(Action::SearchInput('a'));
+            assert_eq!(app.search.query, "a");
+            app.update(Action::SearchInput('b'));
+            assert_eq!(app.search.query, "ab");
+        }
+
+        #[tokio::test]
+        async fn search_backspace_pops() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            app.search.query = "ab".to_string();
+            app.update(Action::SearchBackspace);
+            assert_eq!(app.search.query, "a");
+        }
+
+        #[tokio::test]
+        async fn search_backspace_empty_deactivates() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            app.search.query = "a".to_string();
+            app.search.active = true;
+            app.update(Action::SearchBackspace);
+            // query is now empty
+            assert!(app.search.query.is_empty());
+            assert!(!app.search.active);
+        }
+
+        #[tokio::test]
+        async fn exit_search_mode_keeps_active() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            app.search.query = "foo".to_string();
+            app.update(Action::ExitSearchMode);
+            assert_eq!(app.input_mode, InputMode::Normal);
+            assert!(app.search.active);
+        }
+
+        #[tokio::test]
+        async fn search_confirm_activates() {
+            let (mut app, _rx) = test_app();
+            app.input_mode = InputMode::Search;
+            app.search.query = "bar".to_string();
+            app.update(Action::SearchConfirm);
+            assert_eq!(app.input_mode, InputMode::Normal);
+            assert!(app.search.active);
+        }
+
+        #[tokio::test]
+        async fn clear_search_resets() {
+            let (mut app, _rx) = test_app();
+            app.search.query = "foo".to_string();
+            app.search.active = true;
+            app.search.match_indices = vec![0, 1, 2];
+            app.update(Action::ClearSearch);
+            assert!(app.search.query.is_empty());
+            assert!(!app.search.active);
+            assert!(app.search.match_indices.is_empty());
+        }
+
+        #[tokio::test]
+        async fn search_on_repo_list_computes_matches() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = vec![make_repo("foo-bar"), make_repo("baz"), make_repo("foo-qux")];
+            app.update(Action::SearchInput('f'));
+            app.update(Action::SearchInput('o'));
+            app.update(Action::SearchInput('o'));
+            assert_eq!(app.search.match_indices, vec![0, 2]);
+        }
+
+        // Mutation results
+
+        #[tokio::test]
+        async fn pr_merged_sets_flash() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::PrMerged);
+            assert!(app.flash_message.is_some());
+            assert_eq!(app.flash_message.as_ref().unwrap().0, "PR merged!");
+        }
+
+        #[tokio::test]
+        async fn pr_closed_sets_flash() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::PrClosed);
+            assert!(app.flash_message.is_some());
+            assert_eq!(app.flash_message.as_ref().unwrap().0, "PR closed.");
+        }
+
+        #[tokio::test]
+        async fn issue_closed_sets_flash() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::IssueClosed);
+            assert!(app.flash_message.is_some());
+            assert_eq!(app.flash_message.as_ref().unwrap().0, "Issue closed.");
+        }
+
+        #[tokio::test]
+        async fn comment_posted_sets_flash() {
+            let (mut app, _rx) = test_app();
+            app.update(Action::CommentPosted);
+            assert!(app.flash_message.is_some());
+            assert_eq!(app.flash_message.as_ref().unwrap().0, "Comment posted.");
+        }
+
+        #[tokio::test]
+        async fn error_sets_error_clears_loading() {
+            let (mut app, _rx) = test_app();
+            app.loading = true;
+            app.update(Action::Error("something failed".to_string()));
+            assert_eq!(app.error, Some("something failed".to_string()));
+            assert!(!app.loading);
+        }
+    }
+
+    // ── URL construction tests ──
+
+    mod url_construction {
+        use super::*;
+
+        #[tokio::test]
+        async fn home_review_requests_url() {
+            let (mut app, _rx) = test_app();
+            app.review_requests = vec![make_review_request("octo", "repo", 42)];
+            app.home_section = HomeSection::ReviewRequests;
+            app.review_index = 0;
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/octo/repo/pull/42".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn home_my_prs_url() {
+            let (mut app, _rx) = test_app();
+            app.my_prs = vec![make_my_pr("octo", "repo", 7)];
+            app.home_section = HomeSection::MyPrs;
+            app.my_pr_index = 0;
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/octo/repo/pull/7".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn repo_list_url() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoList;
+            app.repos = vec![make_repo("myrepo")];
+            app.repo_index = 0;
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/testowner/myrepo".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn repo_view_pull_requests_url() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            app.current_repo = Some(("owner".to_string(), "repo".to_string()));
+            app.repo_tab = RepoTab::PullRequests;
+            app.prs = vec![make_pr_summary(99, "test")];
+            app.pr_index = 0;
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/owner/repo/pull/99".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn repo_view_issues_url() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            app.current_repo = Some(("owner".to_string(), "repo".to_string()));
+            app.repo_tab = RepoTab::Issues;
+            app.issues = vec![make_issue(15, "test")];
+            app.issue_index = 0;
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/owner/repo/issues/15".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn repo_view_commits_url() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            app.current_repo = Some(("owner".to_string(), "repo".to_string()));
+            app.repo_tab = RepoTab::Commits;
+            app.commits = vec![make_commit("abc123def456", "msg")];
+            app.commit_index = 0;
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/owner/repo/commit/abc123def456".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn repo_view_actions_url() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::RepoView;
+            app.current_repo = Some(("owner".to_string(), "repo".to_string()));
+            app.repo_tab = RepoTab::Actions;
+            app.action_runs = vec![make_action_run(12345, "CI")];
+            app.action_index = 0;
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/owner/repo/actions/runs/12345".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn pr_detail_url() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::PrDetail;
+            app.current_repo = Some(("owner".to_string(), "repo".to_string()));
+            app.current_pr = Some(make_pull_request(55, "body"));
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/owner/repo/pull/55".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn commit_detail_url() {
+            let (mut app, _rx) = test_app();
+            app.screen = Screen::CommitDetail;
+            app.current_repo = Some(("owner".to_string(), "repo".to_string()));
+            app.current_commit = Some(make_commit_detail("deadbeef", "msg", vec![]));
+            assert_eq!(
+                app.current_item_url(),
+                Some("https://github.com/owner/repo/commit/deadbeef".to_string())
+            );
+        }
+
+        #[tokio::test]
+        async fn empty_state_returns_none() {
+            let (app, _rx) = test_app();
+            // Home screen with no review requests
+            assert_eq!(app.current_item_url(), None);
         }
     }
 }

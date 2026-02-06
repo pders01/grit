@@ -32,3 +32,23 @@ pub fn write<T: Serialize>(key: &str, value: &T) {
 pub fn repo_key(owner: &str, repo: &str) -> String {
     format!("{}_{}", owner.replace('/', "_"), repo.replace('/', "_"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repo_key_sanitizes_slashes() {
+        assert_eq!(repo_key("foo/bar", "baz/qux"), "foo_bar_baz_qux");
+    }
+
+    #[test]
+    fn repo_key_normal_input() {
+        assert_eq!(repo_key("owner", "repo"), "owner_repo");
+    }
+
+    #[test]
+    fn repo_key_empty_strings() {
+        assert_eq!(repo_key("", ""), "_");
+    }
+}

@@ -49,12 +49,53 @@ impl Default for Config {
     }
 }
 
-fn config_path() -> Option<PathBuf> {
+pub fn config_path() -> Option<PathBuf> {
     let config_dir = dirs::config_dir()?;
     Some(config_dir.join("grit").join("config.toml"))
 }
 
 impl Config {
+    /// Returns a documented example config file as a static string.
+    pub fn example_toml() -> &'static str {
+        r#"# grit configuration file
+# Location: ~/.config/grit/config.toml
+#
+# grit auto-detects which forge to use by matching your git remote's
+# hostname against the configured forges below. If no match is found,
+# the first forge in the list is used as the default.
+
+[general]
+# Optional: name of the default forge to use when auto-detection fails
+# default_forge = "github"
+
+# Each [[forges]] block defines a forge instance.
+# Required fields: name, type, host
+# Optional fields: token_env, token_command
+
+[[forges]]
+name = "github"
+type = "github"                   # github | gitlab | gitea
+host = "github.com"
+token_env = "GITHUB_TOKEN"        # env var to read token from
+token_command = "gh auth token"   # fallback: run this command to get token
+
+# Example: Add a GitLab instance
+# [[forges]]
+# name = "work-gitlab"
+# type = "gitlab"
+# host = "gitlab.company.com"
+# token_env = "GITLAB_TOKEN"
+# token_command = "glab auth token"
+
+# Example: Add a Gitea/Forgejo instance
+# [[forges]]
+# name = "codeberg"
+# type = "gitea"
+# host = "codeberg.org"
+# token_env = "GITEA_TOKEN"
+"#
+    }
+
     pub fn load() -> Self {
         let Some(path) = config_path() else {
             return Config::default();

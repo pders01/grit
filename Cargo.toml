@@ -28,3 +28,4 @@ dirs = "5"
 async-trait = "0.1"
 toml = "0.8"
 urlencoding = "2"
+clap = { version = "4", features = ["derive"] }

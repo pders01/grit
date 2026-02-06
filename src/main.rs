@@ -18,6 +18,7 @@ use std::panic;
 use std::sync::Arc;
 use std::time::Duration;
 
+use clap::{Parser, Subcommand};
 use tokio::sync::mpsc;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -29,8 +30,90 @@ use crate::forge::Forge;
 use crate::github::GitHub;
 use crate::tui::EventHandler;
 
+#[derive(Parser)]
+#[command(name = "grit", about = "A TUI for browsing Git forge repositories")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Manage grit configuration
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum ConfigAction {
+    /// Print an example config file with documentation
+    Explain,
+    /// Generate a default config file
+    Init {
+        /// Overwrite existing config file
+        #[arg(long)]
+        force: bool,
+    },
+    /// Print the config file path
+    Path,
+}
+
+fn handle_config_command(action: ConfigAction) {
+    match action {
+        ConfigAction::Explain => {
+            print!("{}", Config::example_toml());
+        }
+        ConfigAction::Init { force } => {
+            let Some(path) = config::config_path() else {
+                eprintln!("Error: could not determine config directory");
+                std::process::exit(1);
+            };
+
+            if path.exists() && !force {
+                eprintln!("Error: config file already exists at {}", path.display());
+                eprintln!("Use --force to overwrite");
+                std::process::exit(1);
+            }
+
+            if let Some(parent) = path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    eprintln!(
+                        "Error: could not create directory {}: {}",
+                        parent.display(),
+                        e
+                    );
+                    std::process::exit(1);
+                }
+            }
+
+            if let Err(e) = std::fs::write(&path, Config::example_toml()) {
+                eprintln!("Error: could not write config file: {}", e);
+                std::process::exit(1);
+            }
+
+            println!("Config file written to {}", path.display());
+        }
+        ConfigAction::Path => match config::config_path() {
+            Some(path) => println!("{}", path.display()),
+            None => {
+                eprintln!("Error: could not determine config directory");
+                std::process::exit(1);
+            }
+        },
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cli = Cli::parse();
+
+    if let Some(Commands::Config { action }) = cli.command {
+        handle_config_command(action);
+        return Ok(());
+    }
+
     // Initialize logging
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")))

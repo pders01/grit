@@ -68,9 +68,10 @@ fn render_tab_content(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_pr_preview(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" Pull Requests ({}) ", app.prs.len()));
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        " Pull Requests ({}) ",
+        super::format_count(app.prs.len(), app.prs_pagination.total_count)
+    ));
 
     if app.prs.is_empty() && !app.loading {
         let empty = Paragraph::new("No open pull requests - Press Enter to view all")
@@ -146,9 +147,10 @@ fn render_pr_preview(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_issues(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" Issues ({}) ", app.issues.len()));
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        " Issues ({}) ",
+        super::format_count(app.issues.len(), app.issues_pagination.total_count)
+    ));
 
     if app.issues.is_empty() && !app.loading {
         let empty = Paragraph::new("No open issues")
@@ -242,9 +244,10 @@ fn render_issues(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_commits(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" Commits ({}) ", app.commits.len()));
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        " Commits ({}) ",
+        super::format_count(app.commits.len(), app.commits_pagination.total_count)
+    ));
 
     if app.commits.is_empty() && !app.loading {
         let empty = Paragraph::new("No commits found")
@@ -315,9 +318,10 @@ fn render_commits(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_actions(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(format!(" Actions ({}) ", app.action_runs.len()));
+    let block = Block::default().borders(Borders::ALL).title(format!(
+        " Actions ({}) ",
+        super::format_count(app.action_runs.len(), app.actions_pagination.total_count)
+    ));
 
     if app.action_runs.is_empty() && !app.loading {
         let empty = Paragraph::new("No workflow runs found")

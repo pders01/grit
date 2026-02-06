@@ -5,8 +5,8 @@ use serde::Deserialize;
 use crate::error::{GritError, Result};
 use crate::forge::Forge;
 use crate::types::{
-    Commit, CommitDetail, CommitFile, CommitStats, Issue, IssueState, PrState, PrStats, PrSummary,
-    PullRequest, Repository,
+    Commit, CommitDetail, CommitFile, CommitStats, Issue, IssueState, PagedResult, PrState,
+    PrStats, PrSummary, PullRequest, Repository,
 };
 
 pub struct Gitea {
@@ -17,7 +17,9 @@ pub struct Gitea {
 
 impl std::fmt::Debug for Gitea {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Gitea").field("host", &self.host).finish_non_exhaustive()
+        f.debug_struct("Gitea")
+            .field("host", &self.host)
+            .finish_non_exhaustive()
     }
 }
 
@@ -56,6 +58,41 @@ impl Gitea {
             .json()
             .await
             .map_err(|e| GritError::Api(e.to_string()))
+    }
+
+    async fn get_json_paged<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<(Vec<T>, Option<u64>)> {
+        let response = self
+            .client
+            .get(url)
+            .header("Authorization", format!("token {}", self.token))
+            .send()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(GritError::Api(format!("Gitea API {}: {}", status, text)));
+        }
+
+        let total_count = response
+            .headers()
+            .get("x-total-count")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+
+        let items: Vec<T> = response
+            .json()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        Ok((items, total_count))
     }
 }
 
@@ -194,9 +231,9 @@ impl Forge for Gitea {
         Ok(user.login)
     }
 
-    async fn list_repos(&self, page: u32) -> Result<Vec<Repository>> {
+    async fn list_repos(&self, page: u32) -> Result<PagedResult<Repository>> {
         let url = self.api_url(&format!("/user/repos?sort=updated&limit=50&page={}", page));
-        let repos: Vec<GtRepo> = self.get_json(&url).await?;
+        let (repos, total_count) = self.get_json_paged::<GtRepo>(&url).await?;
 
         let result = repos
             .into_iter()
@@ -213,15 +250,18 @@ impl Forge for Gitea {
             })
             .collect();
 
-        Ok(result)
+        Ok(PagedResult {
+            items: result,
+            total_count,
+        })
     }
 
-    async fn list_prs(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<PrSummary>> {
+    async fn list_prs(&self, owner: &str, repo: &str, page: u32) -> Result<PagedResult<PrSummary>> {
         let url = self.api_url(&format!(
             "/repos/{}/{}/pulls?state=open&sort=updated&limit=50&page={}",
             owner, repo, page
         ));
-        let prs: Vec<GtPullRequest> = self.get_json(&url).await?;
+        let (prs, total_count) = self.get_json_paged::<GtPullRequest>(&url).await?;
 
         let summaries = prs
             .into_iter()
@@ -237,7 +277,10 @@ impl Forge for Gitea {
             })
             .collect();
 
-        Ok(summaries)
+        Ok(PagedResult {
+            items: summaries,
+            total_count,
+        })
     }
 
     async fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
@@ -269,12 +312,12 @@ impl Forge for Gitea {
         })
     }
 
-    async fn list_issues(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<Issue>> {
+    async fn list_issues(&self, owner: &str, repo: &str, page: u32) -> Result<PagedResult<Issue>> {
         let url = self.api_url(&format!(
             "/repos/{}/{}/issues?type=issues&state=open&sort=updated&limit=50&page={}",
             owner, repo, page
         ));
-        let issues: Vec<GtIssue> = self.get_json(&url).await?;
+        let (issues, total_count) = self.get_json_paged::<GtIssue>(&url).await?;
 
         let result = issues
             .into_iter()
@@ -302,15 +345,23 @@ impl Forge for Gitea {
             })
             .collect();
 
-        Ok(result)
+        Ok(PagedResult {
+            items: result,
+            total_count,
+        })
     }
 
-    async fn list_commits(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<Commit>> {
+    async fn list_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        page: u32,
+    ) -> Result<PagedResult<Commit>> {
         let url = self.api_url(&format!(
             "/repos/{}/{}/commits?limit=50&page={}",
             owner, repo, page
         ));
-        let commits: Vec<GtCommit> = self.get_json(&url).await?;
+        let (commits, total_count) = self.get_json_paged::<GtCommit>(&url).await?;
 
         let result = commits
             .into_iter()
@@ -340,7 +391,10 @@ impl Forge for Gitea {
             })
             .collect();
 
-        Ok(result)
+        Ok(PagedResult {
+            items: result,
+            total_count,
+        })
     }
 
     async fn get_commit(&self, owner: &str, repo: &str, sha: &str) -> Result<CommitDetail> {

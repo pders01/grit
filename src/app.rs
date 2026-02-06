@@ -8,8 +8,8 @@ use crate::cache;
 use crate::event::Event;
 use crate::forge::Forge;
 use crate::types::{
-    ActionRun, Commit, CommitDetail, HomeData, Issue, MyPr, PrSummary, PullRequest, Repository,
-    ReviewRequest,
+    ActionRun, Commit, CommitDetail, HomeData, Issue, MyPr, PagedResult, PrSummary, PullRequest,
+    Repository, ReviewRequest,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,6 +55,7 @@ pub struct PaginationState {
     pub page: u32,
     pub has_more: bool,
     pub loading_more: bool,
+    pub total_count: Option<u64>,
 }
 
 impl Default for PaginationState {
@@ -63,6 +64,7 @@ impl Default for PaginationState {
             page: 1,
             has_more: false,
             loading_more: false,
+            total_count: None,
         }
     }
 }
@@ -883,13 +885,14 @@ impl App {
             }
 
             // Repo list
-            Action::ReposLoaded(repos, load_id) => {
+            Action::ReposLoaded(repos, total, load_id) => {
                 if load_id == self.load_id {
                     self.loading = false;
                     self.repos_pagination = PaginationState {
                         page: 1,
                         has_more: repos.len() == PAGE_SIZE,
                         loading_more: false,
+                        total_count: total,
                     };
                     self.repos = repos;
                     self.repo_index = self.repo_index.min(self.repos.len().saturating_sub(1));
@@ -897,13 +900,14 @@ impl App {
             }
 
             // PR operations
-            Action::PrsLoaded(prs, load_id) => {
+            Action::PrsLoaded(prs, total, load_id) => {
                 if load_id == self.load_id {
                     self.loading = false;
                     self.prs_pagination = PaginationState {
                         page: 1,
                         has_more: prs.len() == PAGE_SIZE,
                         loading_more: false,
+                        total_count: total,
                     };
                     self.prs = prs;
                     self.pr_index = self.pr_index.min(self.prs.len().saturating_sub(1));
@@ -923,13 +927,14 @@ impl App {
             }
 
             // Issues
-            Action::IssuesLoaded(issues, load_id) => {
+            Action::IssuesLoaded(issues, total, load_id) => {
                 if load_id == self.load_id {
                     self.loading = false;
                     self.issues_pagination = PaginationState {
                         page: 1,
                         has_more: issues.len() == PAGE_SIZE,
                         loading_more: false,
+                        total_count: total,
                     };
                     self.issues = issues;
                     self.issue_index = self.issue_index.min(self.issues.len().saturating_sub(1));
@@ -937,13 +942,14 @@ impl App {
             }
 
             // Commits
-            Action::CommitsLoaded(commits, load_id) => {
+            Action::CommitsLoaded(commits, total, load_id) => {
                 if load_id == self.load_id {
                     self.loading = false;
                     self.commits_pagination = PaginationState {
                         page: 1,
                         has_more: commits.len() == PAGE_SIZE,
                         loading_more: false,
+                        total_count: total,
                     };
                     self.commits = commits;
                     self.commit_index = self.commit_index.min(self.commits.len().saturating_sub(1));
@@ -963,13 +969,14 @@ impl App {
             }
 
             // Actions (workflow runs)
-            Action::ActionRunsLoaded(runs, load_id) => {
+            Action::ActionRunsLoaded(runs, total, load_id) => {
                 if load_id == self.load_id {
                     self.loading = false;
                     self.actions_pagination = PaginationState {
                         page: 1,
                         has_more: runs.len() == PAGE_SIZE,
                         loading_more: false,
+                        total_count: total,
                     };
                     self.action_runs = runs;
                     self.action_index = self
@@ -979,38 +986,53 @@ impl App {
             }
 
             // Pagination append handlers
-            Action::ReposAppended(new_repos, load_id) => {
+            Action::ReposAppended(new_repos, total, load_id) => {
                 if load_id == self.load_id {
                     self.repos_pagination.loading_more = false;
                     self.repos_pagination.has_more = new_repos.len() == PAGE_SIZE;
+                    if total.is_some() {
+                        self.repos_pagination.total_count = total;
+                    }
                     self.repos.extend(new_repos);
                 }
             }
-            Action::PrsAppended(new_prs, load_id) => {
+            Action::PrsAppended(new_prs, total, load_id) => {
                 if load_id == self.load_id {
                     self.prs_pagination.loading_more = false;
                     self.prs_pagination.has_more = new_prs.len() == PAGE_SIZE;
+                    if total.is_some() {
+                        self.prs_pagination.total_count = total;
+                    }
                     self.prs.extend(new_prs);
                 }
             }
-            Action::IssuesAppended(new_issues, load_id) => {
+            Action::IssuesAppended(new_issues, total, load_id) => {
                 if load_id == self.load_id {
                     self.issues_pagination.loading_more = false;
                     self.issues_pagination.has_more = new_issues.len() == PAGE_SIZE;
+                    if total.is_some() {
+                        self.issues_pagination.total_count = total;
+                    }
                     self.issues.extend(new_issues);
                 }
             }
-            Action::CommitsAppended(new_commits, load_id) => {
+            Action::CommitsAppended(new_commits, total, load_id) => {
                 if load_id == self.load_id {
                     self.commits_pagination.loading_more = false;
                     self.commits_pagination.has_more = new_commits.len() == PAGE_SIZE;
+                    if total.is_some() {
+                        self.commits_pagination.total_count = total;
+                    }
                     self.commits.extend(new_commits);
                 }
             }
-            Action::ActionRunsAppended(new_runs, load_id) => {
+            Action::ActionRunsAppended(new_runs, total, load_id) => {
                 if load_id == self.load_id {
                     self.actions_pagination.loading_more = false;
                     self.actions_pagination.has_more = new_runs.len() == PAGE_SIZE;
+                    if total.is_some() {
+                        self.actions_pagination.total_count = total;
+                    }
                     self.action_runs.extend(new_runs);
                 }
             }
@@ -1704,14 +1726,15 @@ impl App {
         let cache_key = format!("{}_repos", self.forge_name);
 
         if let Some(cached) = cache::read::<Vec<Repository>>(&cache_key) {
-            tx.send(Action::ReposLoaded(cached, load_id)).ok();
+            tx.send(Action::ReposLoaded(cached, None, load_id)).ok();
         }
 
         tokio::spawn(async move {
             match forge.list_repos(1).await {
-                Ok(repos) => {
-                    cache::write(&cache_key, &repos);
-                    tx.send(Action::ReposLoaded(repos, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    cache::write(&cache_key, &items);
+                    tx.send(Action::ReposLoaded(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1723,17 +1746,20 @@ impl App {
     fn spawn_load_prs(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("prs_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo));
+        let key = format!(
+            "prs_{}",
+            cache::forge_repo_key(&self.forge_name, &owner, &repo)
+        );
 
         if let Some(cached) = cache::read::<Vec<PrSummary>>(&key) {
-            tx.send(Action::PrsLoaded(cached, load_id)).ok();
+            tx.send(Action::PrsLoaded(cached, None, load_id)).ok();
         }
 
         tokio::spawn(async move {
             match forge.list_prs(&owner, &repo, 1).await {
-                Ok(prs) => {
-                    cache::write(&key, &prs);
-                    tx.send(Action::PrsLoaded(prs, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    cache::write(&key, &items);
+                    tx.send(Action::PrsLoaded(items, total_count, load_id)).ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1745,7 +1771,11 @@ impl App {
     fn spawn_load_pr_detail(&self, owner: String, repo: String, number: u64, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("pr_{}_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo), number);
+        let key = format!(
+            "pr_{}_{}",
+            cache::forge_repo_key(&self.forge_name, &owner, &repo),
+            number
+        );
 
         if let Some(cached) = cache::read::<PullRequest>(&key) {
             tx.send(Action::PrDetailLoaded(Box::new(cached), load_id))
@@ -1768,17 +1798,21 @@ impl App {
     fn spawn_load_issues(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("issues_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo));
+        let key = format!(
+            "issues_{}",
+            cache::forge_repo_key(&self.forge_name, &owner, &repo)
+        );
 
         if let Some(cached) = cache::read::<Vec<Issue>>(&key) {
-            tx.send(Action::IssuesLoaded(cached, load_id)).ok();
+            tx.send(Action::IssuesLoaded(cached, None, load_id)).ok();
         }
 
         tokio::spawn(async move {
             match forge.list_issues(&owner, &repo, 1).await {
-                Ok(issues) => {
-                    cache::write(&key, &issues);
-                    tx.send(Action::IssuesLoaded(issues, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    cache::write(&key, &items);
+                    tx.send(Action::IssuesLoaded(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1790,17 +1824,21 @@ impl App {
     fn spawn_load_commits(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("commits_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo));
+        let key = format!(
+            "commits_{}",
+            cache::forge_repo_key(&self.forge_name, &owner, &repo)
+        );
 
         if let Some(cached) = cache::read::<Vec<Commit>>(&key) {
-            tx.send(Action::CommitsLoaded(cached, load_id)).ok();
+            tx.send(Action::CommitsLoaded(cached, None, load_id)).ok();
         }
 
         tokio::spawn(async move {
             match forge.list_commits(&owner, &repo, 1).await {
-                Ok(commits) => {
-                    cache::write(&key, &commits);
-                    tx.send(Action::CommitsLoaded(commits, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    cache::write(&key, &items);
+                    tx.send(Action::CommitsLoaded(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1812,17 +1850,22 @@ impl App {
     fn spawn_load_action_runs(&self, owner: String, repo: String, load_id: u64) {
         let tx = self.action_tx.clone();
         let forge = Arc::clone(&self.forge);
-        let key = format!("actions_{}", cache::forge_repo_key(&self.forge_name, &owner, &repo));
+        let key = format!(
+            "actions_{}",
+            cache::forge_repo_key(&self.forge_name, &owner, &repo)
+        );
 
         if let Some(cached) = cache::read::<Vec<ActionRun>>(&key) {
-            tx.send(Action::ActionRunsLoaded(cached, load_id)).ok();
+            tx.send(Action::ActionRunsLoaded(cached, None, load_id))
+                .ok();
         }
 
         tokio::spawn(async move {
             match forge.list_action_runs(&owner, &repo, 1).await {
-                Ok(runs) => {
-                    cache::write(&key, &runs);
-                    tx.send(Action::ActionRunsLoaded(runs, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    cache::write(&key, &items);
+                    tx.send(Action::ActionRunsLoaded(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1838,8 +1881,9 @@ impl App {
         let forge = Arc::clone(&self.forge);
         tokio::spawn(async move {
             match forge.list_repos(page).await {
-                Ok(repos) => {
-                    tx.send(Action::ReposAppended(repos, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    tx.send(Action::ReposAppended(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1853,8 +1897,9 @@ impl App {
         let forge = Arc::clone(&self.forge);
         tokio::spawn(async move {
             match forge.list_prs(&owner, &repo, page).await {
-                Ok(prs) => {
-                    tx.send(Action::PrsAppended(prs, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    tx.send(Action::PrsAppended(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1868,8 +1913,9 @@ impl App {
         let forge = Arc::clone(&self.forge);
         tokio::spawn(async move {
             match forge.list_issues(&owner, &repo, page).await {
-                Ok(issues) => {
-                    tx.send(Action::IssuesAppended(issues, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    tx.send(Action::IssuesAppended(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1883,8 +1929,9 @@ impl App {
         let forge = Arc::clone(&self.forge);
         tokio::spawn(async move {
             match forge.list_commits(&owner, &repo, page).await {
-                Ok(commits) => {
-                    tx.send(Action::CommitsAppended(commits, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    tx.send(Action::CommitsAppended(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -1898,8 +1945,9 @@ impl App {
         let forge = Arc::clone(&self.forge);
         tokio::spawn(async move {
             match forge.list_action_runs(&owner, &repo, page).await {
-                Ok(runs) => {
-                    tx.send(Action::ActionRunsAppended(runs, load_id)).ok();
+                Ok(PagedResult { items, total_count }) => {
+                    tx.send(Action::ActionRunsAppended(items, total_count, load_id))
+                        .ok();
                 }
                 Err(e) => {
                     tx.send(Action::Error(e.to_string())).ok();
@@ -3025,7 +3073,7 @@ mod tests {
             app.load_id = 3;
             app.repo_index = 10;
             let repos = vec![make_repo("a"), make_repo("b")];
-            app.update(Action::ReposLoaded(repos, 3));
+            app.update(Action::ReposLoaded(repos, None, 3));
             assert_eq!(app.repos.len(), 2);
             assert_eq!(app.repo_index, 1); // clamped
         }
@@ -3034,7 +3082,7 @@ mod tests {
         async fn repos_loaded_stale_id_ignored() {
             let (mut app, _rx) = test_app();
             app.load_id = 5;
-            app.update(Action::ReposLoaded(vec![make_repo("a")], 3));
+            app.update(Action::ReposLoaded(vec![make_repo("a")], None, 3));
             assert!(app.repos.is_empty());
         }
 
@@ -3261,7 +3309,7 @@ mod tests {
             let repos: Vec<Repository> = (0..PAGE_SIZE)
                 .map(|i| make_repo(&format!("r{}", i)))
                 .collect();
-            app.update(Action::ReposLoaded(repos, 1));
+            app.update(Action::ReposLoaded(repos, None, 1));
             assert!(app.repos_pagination.has_more);
             assert_eq!(app.repos_pagination.page, 1);
         }
@@ -3271,7 +3319,7 @@ mod tests {
             let (mut app, _rx) = test_app();
             app.load_id = 1;
             let repos = vec![make_repo("a"), make_repo("b")];
-            app.update(Action::ReposLoaded(repos, 1));
+            app.update(Action::ReposLoaded(repos, None, 1));
             assert!(!app.repos_pagination.has_more);
         }
 
@@ -3282,7 +3330,7 @@ mod tests {
             app.repos = vec![make_repo("a")];
             let new_repos = vec![make_repo("b"), make_repo("c")];
             app.repos_pagination.loading_more = true;
-            app.update(Action::ReposAppended(new_repos, 1));
+            app.update(Action::ReposAppended(new_repos, None, 1));
             assert_eq!(app.repos.len(), 3);
             assert!(!app.repos_pagination.loading_more);
             assert!(!app.repos_pagination.has_more); // 2 < PAGE_SIZE
@@ -3294,7 +3342,7 @@ mod tests {
             app.load_id = 5;
             app.repos = vec![make_repo("a")];
             app.repos_pagination.loading_more = true;
-            app.update(Action::ReposAppended(vec![make_repo("b")], 3));
+            app.update(Action::ReposAppended(vec![make_repo("b")], None, 3));
             assert_eq!(app.repos.len(), 1); // not extended
             assert!(app.repos_pagination.loading_more); // not cleared
         }
@@ -3367,7 +3415,11 @@ mod tests {
             app.load_id = 1;
             app.prs = vec![make_pr_summary(1, "first")];
             app.prs_pagination.loading_more = true;
-            app.update(Action::PrsAppended(vec![make_pr_summary(2, "second")], 1));
+            app.update(Action::PrsAppended(
+                vec![make_pr_summary(2, "second")],
+                None,
+                1,
+            ));
             assert_eq!(app.prs.len(), 2);
             assert!(!app.prs_pagination.loading_more);
         }
@@ -3379,7 +3431,7 @@ mod tests {
             app.repos_pagination.page = 3;
             app.repos_pagination.has_more = true;
             app.repos_pagination.loading_more = true;
-            app.update(Action::ReposLoaded(vec![make_repo("a")], 1));
+            app.update(Action::ReposLoaded(vec![make_repo("a")], None, 1));
             assert_eq!(app.repos_pagination.page, 1);
             assert!(!app.repos_pagination.has_more);
             assert!(!app.repos_pagination.loading_more);

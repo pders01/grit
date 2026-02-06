@@ -6,8 +6,8 @@ use crate::error::{GritError, Result};
 use crate::forge::Forge;
 use crate::types::{
     ActionConclusion, ActionRun, ActionStatus, ChecksStatus, Commit, CommitDetail, CommitFile,
-    CommitStats, Issue, IssueState, MyPr, PrState, PrStats, PrSummary, PullRequest, Repository,
-    ReviewRequest,
+    CommitStats, Issue, IssueState, MyPr, PagedResult, PrState, PrStats, PrSummary, PullRequest,
+    Repository, ReviewRequest,
 };
 
 pub struct GitHub {
@@ -62,7 +62,7 @@ impl Forge for GitHub {
         Ok(user.login)
     }
 
-    async fn list_repos(&self, page: u32) -> Result<Vec<Repository>> {
+    async fn list_repos(&self, page: u32) -> Result<PagedResult<Repository>> {
         let repos = self
             .client
             .current()
@@ -73,6 +73,10 @@ impl Forge for GitHub {
             .page(page as u8)
             .send()
             .await?;
+
+        let total = repos
+            .total_count
+            .or_else(|| repos.number_of_pages().map(|n| n as u64 * 50));
 
         let repositories = repos
             .items
@@ -90,10 +94,13 @@ impl Forge for GitHub {
             })
             .collect();
 
-        Ok(repositories)
+        Ok(PagedResult {
+            items: repositories,
+            total_count: total,
+        })
     }
 
-    async fn list_prs(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<PrSummary>> {
+    async fn list_prs(&self, owner: &str, repo: &str, page: u32) -> Result<PagedResult<PrSummary>> {
         let prs = self
             .client
             .pulls(owner, repo)
@@ -105,6 +112,10 @@ impl Forge for GitHub {
             .page(page)
             .send()
             .await?;
+
+        let total = prs
+            .total_count
+            .or_else(|| prs.number_of_pages().map(|n| n as u64 * 50));
 
         let summaries = prs
             .items
@@ -127,7 +138,10 @@ impl Forge for GitHub {
             })
             .collect();
 
-        Ok(summaries)
+        Ok(PagedResult {
+            items: summaries,
+            total_count: total,
+        })
     }
 
     async fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
@@ -166,7 +180,7 @@ impl Forge for GitHub {
         })
     }
 
-    async fn list_issues(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<Issue>> {
+    async fn list_issues(&self, owner: &str, repo: &str, page: u32) -> Result<PagedResult<Issue>> {
         let issues = self
             .client
             .issues(owner, repo)
@@ -178,6 +192,10 @@ impl Forge for GitHub {
             .page(page)
             .send()
             .await?;
+
+        let total = issues
+            .total_count
+            .or_else(|| issues.number_of_pages().map(|n| n as u64 * 50));
 
         let result = issues
             .items
@@ -198,10 +216,18 @@ impl Forge for GitHub {
             })
             .collect();
 
-        Ok(result)
+        Ok(PagedResult {
+            items: result,
+            total_count: total,
+        })
     }
 
-    async fn list_commits(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<Commit>> {
+    async fn list_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        page: u32,
+    ) -> Result<PagedResult<Commit>> {
         let commits = self
             .client
             .repos(owner, repo)
@@ -210,6 +236,10 @@ impl Forge for GitHub {
             .page(page)
             .send()
             .await?;
+
+        let total = commits
+            .total_count
+            .or_else(|| commits.number_of_pages().map(|n| n as u64 * 50));
 
         let result = commits
             .items
@@ -236,7 +266,10 @@ impl Forge for GitHub {
             })
             .collect();
 
-        Ok(result)
+        Ok(PagedResult {
+            items: result,
+            total_count: total,
+        })
     }
 
     async fn get_commit(&self, owner: &str, repo: &str, sha: &str) -> Result<CommitDetail> {
@@ -498,12 +531,19 @@ impl Forge for GitHub {
         Ok(my_prs)
     }
 
-    async fn list_action_runs(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<ActionRun>> {
+    async fn list_action_runs(
+        &self,
+        owner: &str,
+        repo: &str,
+        page: u32,
+    ) -> Result<PagedResult<ActionRun>> {
         let url = format!(
             "/repos/{}/{}/actions/runs?per_page=50&page={}",
             owner, repo, page
         );
         let response: serde_json::Value = self.client.get(&url, None::<&()>).await?;
+
+        let total = response.get("total_count").and_then(|v| v.as_u64());
 
         let runs = response
             .get("workflow_runs")
@@ -551,7 +591,10 @@ impl Forge for GitHub {
             })
             .unwrap_or_default();
 
-        Ok(runs)
+        Ok(PagedResult {
+            items: runs,
+            total_count: total,
+        })
     }
 
     async fn get_check_status(

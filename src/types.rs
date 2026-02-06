@@ -2,6 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+pub struct PagedResult<T> {
+    pub items: Vec<T>,
+    pub total_count: Option<u64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MergeMethod {
     Merge,

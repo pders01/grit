@@ -73,28 +73,28 @@ pub enum Action {
     SwitchRepoTab(RepoTab),
 
     // Repo list
-    ReposLoaded(Vec<Repository>, u64),
+    ReposLoaded(Vec<Repository>, Option<u64>, u64),
 
     // PR operations
-    PrsLoaded(Vec<PrSummary>, u64),
+    PrsLoaded(Vec<PrSummary>, Option<u64>, u64),
     PrDetailLoaded(Box<PullRequest>, u64),
 
     // Issues
-    IssuesLoaded(Vec<Issue>, u64),
+    IssuesLoaded(Vec<Issue>, Option<u64>, u64),
 
     // Commits
-    CommitsLoaded(Vec<Commit>, u64),
+    CommitsLoaded(Vec<Commit>, Option<u64>, u64),
     CommitDetailLoaded(Box<CommitDetail>, u64),
 
     // Actions (workflow runs)
-    ActionRunsLoaded(Vec<ActionRun>, u64),
+    ActionRunsLoaded(Vec<ActionRun>, Option<u64>, u64),
 
     // Pagination: append next page to existing list
-    ReposAppended(Vec<Repository>, u64),
-    PrsAppended(Vec<PrSummary>, u64),
-    IssuesAppended(Vec<Issue>, u64),
-    CommitsAppended(Vec<Commit>, u64),
-    ActionRunsAppended(Vec<ActionRun>, u64),
+    ReposAppended(Vec<Repository>, Option<u64>, u64),
+    PrsAppended(Vec<PrSummary>, Option<u64>, u64),
+    IssuesAppended(Vec<Issue>, Option<u64>, u64),
+    CommitsAppended(Vec<Commit>, Option<u64>, u64),
+    ActionRunsAppended(Vec<ActionRun>, Option<u64>, u64),
 
     // Search
     EnterSearchMode,

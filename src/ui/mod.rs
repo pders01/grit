@@ -5,6 +5,13 @@ mod pr_detail;
 mod repo_list;
 mod repo_view;
 
+pub fn format_count(loaded: usize, total: Option<u64>) -> String {
+    match total {
+        Some(t) => format!("{}/{}", loaded, t),
+        None => format!("{}", loaded),
+    }
+}
+
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -187,9 +194,7 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled(
                 format!("[{}] ", app.forge_name),
-                Style::default()
-                    .fg(Color::Gray)
-                    .add_modifier(Modifier::DIM),
+                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
             ),
             Span::styled(help, Style::default().fg(Color::Gray)),
         ])

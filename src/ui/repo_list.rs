@@ -71,11 +71,10 @@ pub fn render(frame: &mut Frame, app: &App, area: Rect) {
         .collect();
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Repositories ({})", app.repos.len())),
-        )
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            "Repositories ({})",
+            super::format_count(app.repos.len(), app.repos_pagination.total_count)
+        )))
         .highlight_style(Style::default().bg(Color::DarkGray));
 
     let mut state = ListState::default();

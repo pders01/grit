@@ -6,7 +6,8 @@ use crate::error::{GritError, Result};
 use crate::forge::Forge;
 use crate::types::{
     ActionConclusion, ActionRun, ActionStatus, ChecksStatus, Commit, CommitDetail, CommitFile,
-    CommitStats, Issue, IssueState, PrState, PrStats, PrSummary, PullRequest, Repository,
+    CommitStats, Issue, IssueState, PagedResult, PrState, PrStats, PrSummary, PullRequest,
+    Repository,
 };
 
 pub struct GitLab {
@@ -17,7 +18,9 @@ pub struct GitLab {
 
 impl std::fmt::Debug for GitLab {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GitLab").field("host", &self.host).finish_non_exhaustive()
+        f.debug_struct("GitLab")
+            .field("host", &self.host)
+            .finish_non_exhaustive()
     }
 }
 
@@ -61,6 +64,41 @@ impl GitLab {
             .json()
             .await
             .map_err(|e| GritError::Api(e.to_string()))
+    }
+
+    async fn get_json_paged<T: serde::de::DeserializeOwned>(
+        &self,
+        url: &str,
+    ) -> Result<(Vec<T>, Option<u64>)> {
+        let response = self
+            .client
+            .get(url)
+            .header("PRIVATE-TOKEN", &self.token)
+            .send()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(GritError::Api(format!("GitLab API {}: {}", status, text)));
+        }
+
+        let total_count = response
+            .headers()
+            .get("x-total")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok());
+
+        let items: Vec<T> = response
+            .json()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        Ok((items, total_count))
     }
 }
 
@@ -200,12 +238,12 @@ impl Forge for GitLab {
         Ok(user.username)
     }
 
-    async fn list_repos(&self, page: u32) -> Result<Vec<Repository>> {
+    async fn list_repos(&self, page: u32) -> Result<PagedResult<Repository>> {
         let url = self.api_url(&format!(
             "/projects?membership=true&order_by=last_activity_at&sort=desc&per_page=50&page={}",
             page
         ));
-        let projects: Vec<GlProject> = self.get_json(&url).await?;
+        let (projects, total_count) = self.get_json_paged::<GlProject>(&url).await?;
 
         let repos = projects
             .into_iter()
@@ -229,16 +267,19 @@ impl Forge for GitLab {
             })
             .collect();
 
-        Ok(repos)
+        Ok(PagedResult {
+            items: repos,
+            total_count,
+        })
     }
 
-    async fn list_prs(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<PrSummary>> {
+    async fn list_prs(&self, owner: &str, repo: &str, page: u32) -> Result<PagedResult<PrSummary>> {
         let project = Self::project_path(owner, repo);
         let url = self.api_url(&format!(
             "/projects/{}/merge_requests?state=opened&order_by=updated_at&sort=desc&per_page=50&page={}",
             project, page
         ));
-        let mrs: Vec<GlMergeRequest> = self.get_json(&url).await?;
+        let (mrs, total_count) = self.get_json_paged::<GlMergeRequest>(&url).await?;
 
         let summaries = mrs
             .into_iter()
@@ -251,7 +292,10 @@ impl Forge for GitLab {
             })
             .collect();
 
-        Ok(summaries)
+        Ok(PagedResult {
+            items: summaries,
+            total_count,
+        })
     }
 
     async fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
@@ -287,13 +331,13 @@ impl Forge for GitLab {
         })
     }
 
-    async fn list_issues(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<Issue>> {
+    async fn list_issues(&self, owner: &str, repo: &str, page: u32) -> Result<PagedResult<Issue>> {
         let project = Self::project_path(owner, repo);
         let url = self.api_url(&format!(
             "/projects/{}/issues?state=opened&order_by=updated_at&sort=desc&per_page=50&page={}",
             project, page
         ));
-        let issues: Vec<GlIssue> = self.get_json(&url).await?;
+        let (issues, total_count) = self.get_json_paged::<GlIssue>(&url).await?;
 
         let result = issues
             .into_iter()
@@ -313,16 +357,24 @@ impl Forge for GitLab {
             })
             .collect();
 
-        Ok(result)
+        Ok(PagedResult {
+            items: result,
+            total_count,
+        })
     }
 
-    async fn list_commits(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<Commit>> {
+    async fn list_commits(
+        &self,
+        owner: &str,
+        repo: &str,
+        page: u32,
+    ) -> Result<PagedResult<Commit>> {
         let project = Self::project_path(owner, repo);
         let url = self.api_url(&format!(
             "/projects/{}/repository/commits?per_page=50&page={}",
             project, page
         ));
-        let commits: Vec<GlCommit> = self.get_json(&url).await?;
+        let (commits, total_count) = self.get_json_paged::<GlCommit>(&url).await?;
 
         let result = commits
             .into_iter()
@@ -344,7 +396,10 @@ impl Forge for GitLab {
             })
             .collect();
 
-        Ok(result)
+        Ok(PagedResult {
+            items: result,
+            total_count,
+        })
     }
 
     async fn get_commit(&self, owner: &str, repo: &str, sha: &str) -> Result<CommitDetail> {
@@ -565,13 +620,18 @@ impl Forge for GitLab {
         Ok(())
     }
 
-    async fn list_action_runs(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<ActionRun>> {
+    async fn list_action_runs(
+        &self,
+        owner: &str,
+        repo: &str,
+        page: u32,
+    ) -> Result<PagedResult<ActionRun>> {
         let project = Self::project_path(owner, repo);
         let url = self.api_url(&format!(
             "/projects/{}/pipelines?per_page=50&page={}",
             project, page
         ));
-        let pipelines: Vec<GlPipeline> = self.get_json(&url).await?;
+        let (pipelines, total_count) = self.get_json_paged::<GlPipeline>(&url).await?;
 
         let runs = pipelines
             .into_iter()
@@ -589,7 +649,10 @@ impl Forge for GitLab {
             })
             .collect();
 
-        Ok(runs)
+        Ok(PagedResult {
+            items: runs,
+            total_count,
+        })
     }
 
     async fn get_check_status(

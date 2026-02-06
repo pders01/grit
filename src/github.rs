@@ -1,7 +1,9 @@
+use async_trait::async_trait;
 use octocrab::models::IssueState as OctoIssueState;
 use octocrab::Octocrab;
 
 use crate::error::{GritError, Result};
+use crate::forge::Forge;
 use crate::types::{
     ActionConclusion, ActionRun, ActionStatus, ChecksStatus, Commit, CommitDetail, CommitFile,
     CommitStats, Issue, IssueState, MyPr, PrState, PrStats, PrSummary, PullRequest, Repository,
@@ -13,6 +15,12 @@ pub struct GitHub {
     token: String,
 }
 
+impl From<octocrab::Error> for GritError {
+    fn from(err: octocrab::Error) -> Self {
+        GritError::Api(err.to_string())
+    }
+}
+
 impl GitHub {
     pub fn new(token: String) -> Result<Self> {
         let client = Octocrab::builder()
@@ -22,8 +30,33 @@ impl GitHub {
 
         Ok(Self { client, token })
     }
+}
 
-    pub async fn list_repos(&self) -> Result<Vec<Repository>> {
+#[async_trait]
+impl Forge for GitHub {
+    fn name(&self) -> &str {
+        "GitHub"
+    }
+
+    fn web_url(&self, owner: &str, repo: &str, kind: &str, id: &str) -> String {
+        match kind {
+            "repo" => format!("https://github.com/{}/{}", owner, repo),
+            "pr" => format!("https://github.com/{}/{}/pull/{}", owner, repo, id),
+            "issue" => format!("https://github.com/{}/{}/issues/{}", owner, repo, id),
+            "commit" => format!("https://github.com/{}/{}/commit/{}", owner, repo, id),
+            "action_run" => {
+                format!("https://github.com/{}/{}/actions/runs/{}", owner, repo, id)
+            }
+            _ => format!("https://github.com/{}/{}", owner, repo),
+        }
+    }
+
+    async fn get_current_user(&self) -> Result<String> {
+        let user = self.client.current().user().await?;
+        Ok(user.login)
+    }
+
+    async fn list_repos(&self, page: u32) -> Result<Vec<Repository>> {
         let repos = self
             .client
             .current()
@@ -31,6 +64,7 @@ impl GitHub {
             .sort("updated")
             .direction("desc")
             .per_page(50)
+            .page(page as u8)
             .send()
             .await?;
 
@@ -53,7 +87,7 @@ impl GitHub {
         Ok(repositories)
     }
 
-    pub async fn list_prs(&self, owner: &str, repo: &str) -> Result<Vec<PrSummary>> {
+    async fn list_prs(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<PrSummary>> {
         let prs = self
             .client
             .pulls(owner, repo)
@@ -62,6 +96,7 @@ impl GitHub {
             .sort(octocrab::params::pulls::Sort::Updated)
             .direction(octocrab::params::Direction::Descending)
             .per_page(50)
+            .page(page)
             .send()
             .await?;
 
@@ -89,7 +124,7 @@ impl GitHub {
         Ok(summaries)
     }
 
-    pub async fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
+    async fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<PullRequest> {
         let pr = self.client.pulls(owner, repo).get(number).await?;
 
         let state = match pr.merged_at {
@@ -125,116 +160,7 @@ impl GitHub {
         })
     }
 
-    /// Get the current authenticated user's login
-    pub async fn get_current_user(&self) -> Result<String> {
-        let user = self.client.current().user().await?;
-        Ok(user.login)
-    }
-
-    /// List PRs where the current user is requested as a reviewer
-    pub async fn list_review_requests(&self, username: &str) -> Result<Vec<ReviewRequest>> {
-        let query = format!("is:pr is:open review-requested:{}", username);
-
-        let results = self
-            .client
-            .search()
-            .issues_and_pull_requests(&query)
-            .per_page(50)
-            .send()
-            .await?;
-
-        let review_requests = results
-            .items
-            .into_iter()
-            .filter_map(|issue| {
-                // Parse repo info from the repository_url
-                let repo_url = issue.repository_url.as_str();
-                let parts: Vec<&str> = repo_url.split('/').collect();
-                if parts.len() < 2 {
-                    return None;
-                }
-                let repo_name = parts[parts.len() - 1].to_string();
-                let repo_owner = parts[parts.len() - 2].to_string();
-
-                Some(ReviewRequest {
-                    repo_owner,
-                    repo_name,
-                    pr_number: issue.number,
-                    pr_title: issue.title,
-                    author: issue.user.login,
-                    updated_at: issue.updated_at,
-                })
-            })
-            .collect();
-
-        Ok(review_requests)
-    }
-
-    /// List open PRs authored by the current user
-    pub async fn list_my_prs(&self, username: &str) -> Result<Vec<MyPr>> {
-        let query = format!("is:pr is:open author:{}", username);
-
-        let results = self
-            .client
-            .search()
-            .issues_and_pull_requests(&query)
-            .per_page(50)
-            .send()
-            .await?;
-
-        // First, collect basic PR info
-        let prs_without_status: Vec<_> = results
-            .items
-            .into_iter()
-            .filter_map(|issue| {
-                let repo_url = issue.repository_url.as_str();
-                let parts: Vec<&str> = repo_url.split('/').collect();
-                if parts.len() < 2 {
-                    return None;
-                }
-                let repo_name = parts[parts.len() - 1].to_string();
-                let repo_owner = parts[parts.len() - 2].to_string();
-
-                let state = match issue.state {
-                    OctoIssueState::Closed => PrState::Closed,
-                    _ => PrState::Open,
-                };
-
-                Some((
-                    repo_owner,
-                    repo_name,
-                    issue.number,
-                    issue.title,
-                    state,
-                    issue.updated_at,
-                ))
-            })
-            .collect();
-
-        // Fetch check status for each PR concurrently
-        let mut my_prs = Vec::with_capacity(prs_without_status.len());
-        for (repo_owner, repo_name, number, title, state, updated_at) in prs_without_status {
-            let checks_status = self
-                .get_check_status(&repo_owner, &repo_name, number)
-                .await
-                .unwrap_or(ChecksStatus::None);
-
-            my_prs.push(MyPr {
-                repo_owner,
-                repo_name,
-                number,
-                title,
-                state,
-                checks_status,
-                updated_at,
-            });
-        }
-
-        Ok(my_prs)
-    }
-
-    /// List issues for a repository
-    pub async fn list_issues(&self, owner: &str, repo: &str) -> Result<Vec<Issue>> {
+    async fn list_issues(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<Issue>> {
         let issues = self
             .client
             .issues(owner, repo)
@@ -243,6 +169,7 @@ impl GitHub {
             .sort(octocrab::params::issues::Sort::Updated)
             .direction(octocrab::params::Direction::Descending)
             .per_page(50)
+            .page(page)
             .send()
             .await?;
 
@@ -268,13 +195,13 @@ impl GitHub {
         Ok(result)
     }
 
-    /// List commits for a repository (default branch)
-    pub async fn list_commits(&self, owner: &str, repo: &str) -> Result<Vec<Commit>> {
+    async fn list_commits(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<Commit>> {
         let commits = self
             .client
             .repos(owner, repo)
             .list_commits()
             .per_page(50)
+            .page(page)
             .send()
             .await?;
 
@@ -306,8 +233,7 @@ impl GitHub {
         Ok(result)
     }
 
-    /// Get commit detail with files changed
-    pub async fn get_commit(&self, owner: &str, repo: &str, sha: &str) -> Result<CommitDetail> {
+    async fn get_commit(&self, owner: &str, repo: &str, sha: &str) -> Result<CommitDetail> {
         let url = format!("/repos/{}/{}/commits/{}", owner, repo, sha);
         let response: serde_json::Value = self.client.get(&url, None::<&()>).await?;
 
@@ -386,9 +312,191 @@ impl GitHub {
         })
     }
 
-    /// List GitHub Actions workflow runs for a repository
-    pub async fn list_action_runs(&self, owner: &str, repo: &str) -> Result<Vec<ActionRun>> {
-        let url = format!("/repos/{}/{}/actions/runs?per_page=30", owner, repo);
+    async fn get_pr_diff(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}",
+            owner, repo, number
+        );
+        let client = reqwest::Client::new();
+        let response = client
+            .get(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github.diff")
+            .header("User-Agent", "grit")
+            .send()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(GritError::Api(format!(
+                "Failed to fetch diff: {}",
+                response.status()
+            )));
+        }
+
+        response
+            .text()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))
+    }
+
+    async fn merge_pr(&self, owner: &str, repo: &str, number: u64, method: &str) -> Result<()> {
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/{}/merge",
+            owner, repo, number
+        );
+        let client = reqwest::Client::new();
+        let body = serde_json::json!({ "merge_method": method });
+        let response = client
+            .put(&url)
+            .header("Authorization", format!("Bearer {}", self.token))
+            .header("Accept", "application/vnd.github+json")
+            .header("User-Agent", "grit")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| GritError::Api(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let text = response
+                .text()
+                .await
+                .unwrap_or_else(|_| "unknown error".to_string());
+            return Err(GritError::Api(format!("Merge failed: {}", text)));
+        }
+        Ok(())
+    }
+
+    async fn close_pr(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        self.client
+            .pulls(owner, repo)
+            .update(number)
+            .state(octocrab::params::pulls::State::Closed)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn close_issue(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
+        self.client
+            .issues(owner, repo)
+            .update(number)
+            .state(OctoIssueState::Closed)
+            .send()
+            .await?;
+        Ok(())
+    }
+
+    async fn comment(&self, owner: &str, repo: &str, number: u64, body: &str) -> Result<()> {
+        self.client
+            .issues(owner, repo)
+            .create_comment(number, body)
+            .await?;
+        Ok(())
+    }
+
+    async fn list_review_requests(&self, username: &str) -> Result<Vec<ReviewRequest>> {
+        let query = format!("is:pr is:open review-requested:{}", username);
+
+        let results = self
+            .client
+            .search()
+            .issues_and_pull_requests(&query)
+            .per_page(50)
+            .send()
+            .await?;
+
+        let review_requests = results
+            .items
+            .into_iter()
+            .filter_map(|issue| {
+                let repo_url = issue.repository_url.as_str();
+                let parts: Vec<&str> = repo_url.split('/').collect();
+                if parts.len() < 2 {
+                    return None;
+                }
+                let repo_name = parts[parts.len() - 1].to_string();
+                let repo_owner = parts[parts.len() - 2].to_string();
+
+                Some(ReviewRequest {
+                    repo_owner,
+                    repo_name,
+                    pr_number: issue.number,
+                    pr_title: issue.title,
+                    author: issue.user.login,
+                    updated_at: issue.updated_at,
+                })
+            })
+            .collect();
+
+        Ok(review_requests)
+    }
+
+    async fn list_my_prs(&self, username: &str) -> Result<Vec<MyPr>> {
+        let query = format!("is:pr is:open author:{}", username);
+
+        let results = self
+            .client
+            .search()
+            .issues_and_pull_requests(&query)
+            .per_page(50)
+            .send()
+            .await?;
+
+        let prs_without_status: Vec<_> = results
+            .items
+            .into_iter()
+            .filter_map(|issue| {
+                let repo_url = issue.repository_url.as_str();
+                let parts: Vec<&str> = repo_url.split('/').collect();
+                if parts.len() < 2 {
+                    return None;
+                }
+                let repo_name = parts[parts.len() - 1].to_string();
+                let repo_owner = parts[parts.len() - 2].to_string();
+
+                let state = match issue.state {
+                    OctoIssueState::Closed => PrState::Closed,
+                    _ => PrState::Open,
+                };
+
+                Some((
+                    repo_owner,
+                    repo_name,
+                    issue.number,
+                    issue.title,
+                    state,
+                    issue.updated_at,
+                ))
+            })
+            .collect();
+
+        let mut my_prs = Vec::with_capacity(prs_without_status.len());
+        for (repo_owner, repo_name, number, title, state, updated_at) in prs_without_status {
+            let checks_status = self
+                .get_check_status(&repo_owner, &repo_name, number)
+                .await
+                .unwrap_or(ChecksStatus::None);
+
+            my_prs.push(MyPr {
+                repo_owner,
+                repo_name,
+                number,
+                title,
+                state,
+                checks_status,
+                updated_at,
+            });
+        }
+
+        Ok(my_prs)
+    }
+
+    async fn list_action_runs(&self, owner: &str, repo: &str, page: u32) -> Result<Vec<ActionRun>> {
+        let url = format!(
+            "/repos/{}/{}/actions/runs?per_page=50&page={}",
+            owner, repo, page
+        );
         let response: serde_json::Value = self.client.get(&url, None::<&()>).await?;
 
         let runs = response
@@ -440,18 +548,15 @@ impl GitHub {
         Ok(runs)
     }
 
-    /// Get check status for a PR
-    pub async fn get_check_status(
+    async fn get_check_status(
         &self,
         owner: &str,
         repo: &str,
         pr_number: u64,
     ) -> Result<ChecksStatus> {
-        // Get the PR to find the head SHA
         let pr = self.client.pulls(owner, repo).get(pr_number).await?;
         let sha = pr.head.sha;
 
-        // Get combined status
         let url = format!("/repos/{}/{}/commits/{}/check-runs", owner, repo, sha);
         let response: serde_json::Value = self.client.get(&url, None::<&()>).await?;
 
@@ -496,96 +601,7 @@ impl GitHub {
         }
     }
 
-    /// Fetch raw diff for a pull request
-    pub async fn get_pr_diff(&self, owner: &str, repo: &str, number: u64) -> Result<String> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/pulls/{}",
-            owner, repo, number
-        );
-        let client = reqwest::Client::new();
-        let response = client
-            .get(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("Accept", "application/vnd.github.diff")
-            .header("User-Agent", "grit")
-            .send()
-            .await
-            .map_err(|e| GritError::Api(e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(GritError::Api(format!(
-                "Failed to fetch diff: {}",
-                response.status()
-            )));
-        }
-
-        response
-            .text()
-            .await
-            .map_err(|e| GritError::Api(e.to_string()))
-    }
-
-    /// Merge a pull request
-    pub async fn merge_pr(&self, owner: &str, repo: &str, number: u64, method: &str) -> Result<()> {
-        let url = format!(
-            "https://api.github.com/repos/{}/{}/pulls/{}/merge",
-            owner, repo, number
-        );
-        let client = reqwest::Client::new();
-        let body = serde_json::json!({ "merge_method": method });
-        let response = client
-            .put(&url)
-            .header("Authorization", format!("Bearer {}", self.token))
-            .header("Accept", "application/vnd.github+json")
-            .header("User-Agent", "grit")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| GritError::Api(e.to_string()))?;
-
-        if !response.status().is_success() {
-            let text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "unknown error".to_string());
-            return Err(GritError::Api(format!("Merge failed: {}", text)));
-        }
-        Ok(())
-    }
-
-    /// Close a pull request
-    pub async fn close_pr(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
-        self.client
-            .pulls(owner, repo)
-            .update(number)
-            .state(octocrab::params::pulls::State::Closed)
-            .send()
-            .await?;
-        Ok(())
-    }
-
-    /// Close an issue
-    pub async fn close_issue(&self, owner: &str, repo: &str, number: u64) -> Result<()> {
-        self.client
-            .issues(owner, repo)
-            .update(number)
-            .state(OctoIssueState::Closed)
-            .send()
-            .await?;
-        Ok(())
-    }
-
-    /// Comment on an issue or PR (GitHub treats PR comments as issue comments)
-    pub async fn comment(&self, owner: &str, repo: &str, number: u64, body: &str) -> Result<()> {
-        self.client
-            .issues(owner, repo)
-            .create_comment(number, body)
-            .await?;
-        Ok(())
-    }
-
-    /// Submit a PR review
-    pub async fn submit_review(
+    async fn submit_review(
         &self,
         owner: &str,
         repo: &str,

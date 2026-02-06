@@ -25,3 +25,4 @@ reqwest = { version = "0.12", features = ["json"] }
 open = "5"
 arboard = "3"
 dirs = "5"
+async-trait = "0.1"

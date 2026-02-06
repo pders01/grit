@@ -12,10 +12,4 @@ pub enum GritError {
     Io(#[from] std::io::Error),
 }
 
-impl From<octocrab::Error> for GritError {
-    fn from(err: octocrab::Error) -> Self {
-        GritError::Api(err.to_string())
-    }
-}
-
 pub type Result<T> = std::result::Result<T, GritError>;

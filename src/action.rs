@@ -86,6 +86,13 @@ pub enum Action {
     // Actions (workflow runs)
     ActionRunsLoaded(Vec<ActionRun>, u64),
 
+    // Pagination: append next page to existing list
+    ReposAppended(Vec<Repository>, u64),
+    PrsAppended(Vec<PrSummary>, u64),
+    IssuesAppended(Vec<Issue>, u64),
+    CommitsAppended(Vec<Commit>, u64),
+    ActionRunsAppended(Vec<ActionRun>, u64),
+
     // Search
     EnterSearchMode,
     ExitSearchMode,

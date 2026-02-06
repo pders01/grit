@@ -4,6 +4,7 @@ mod auth;
 mod cache;
 mod error;
 mod event;
+mod forge;
 mod github;
 mod pager;
 mod tui;
@@ -11,6 +12,7 @@ mod types;
 mod ui;
 
 use std::panic;
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -19,6 +21,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use crate::action::{Action, EditorContext};
 use crate::app::App;
 use crate::event::Event;
+use crate::forge::Forge;
 use crate::github::GitHub;
 use crate::tui::EventHandler;
 
@@ -42,11 +45,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(Box::<dyn std::error::Error>::from)?;
 
-    // Initialize GitHub client
-    let github = GitHub::new(token)?;
+    // Initialize forge client
+    let forge: Arc<dyn Forge> = Arc::new(GitHub::new(token)?);
 
     // Run the application
-    let result = run(github).await;
+    let result = run(forge).await;
 
     // Restore terminal
     tui::restore()?;
@@ -60,7 +63,7 @@ enum SuspendAction {
     Editor(EditorContext),
 }
 
-async fn run(github: GitHub) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(forge: Arc<dyn Forge>) -> Result<(), Box<dyn std::error::Error>> {
     // Initialize terminal
     let mut terminal = tui::init()?;
 
@@ -68,7 +71,7 @@ async fn run(github: GitHub) -> Result<(), Box<dyn std::error::Error>> {
     let (action_tx, mut action_rx) = mpsc::unbounded_channel::<Action>();
 
     // Create app state
-    let mut app = App::new(github, action_tx.clone());
+    let mut app = App::new(forge, action_tx.clone());
 
     // Create event handler
     let tick_rate = Duration::from_millis(250);
